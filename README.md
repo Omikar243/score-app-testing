@@ -1,5 +1,5 @@
 
-# Feature Scoring Application
+# Data Analyst Assignment
 
 This streamlit application generates synthetic data for different features and calculates scores based on selected features.
 
