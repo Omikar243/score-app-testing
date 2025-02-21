@@ -27,7 +27,7 @@ pip install -r requirements.txt
 Execute the following command in your terminal:
 
 ```bash
-streamlit run a.py
+streamlit run app.py
 ```
 
 The application will start and automatically open in your default web browser. If it doesn't open automatically, you can access it at http://localhost:8501.
