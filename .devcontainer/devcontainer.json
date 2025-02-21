@@ -17,7 +17,7 @@
       ]
     }
   },
-"updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements-file.txt ] && pip3 install -r requirements-file.txt; pip3 install streamlit; echo '✅ Packages installed and Requirements met'",
+"updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install -r requirements.txt; pip3 install streamlit; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
     "server": "streamlit run a.py --server.enableCORS false --server.enableXsrfProtection false"
   },
