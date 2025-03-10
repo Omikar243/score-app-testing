@@ -2,4 +2,4 @@ streamlit==1.32.0
 matplotlib==3.8.2
 pandas==2.2.0
 numpy==1.26.3
-
+seaborn==0.13.2
