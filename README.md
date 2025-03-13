@@ -1,5 +1,5 @@
 
-# Data Analyst Assignment
+# Score App Testing
 
 This streamlit application generates synthetic data for different features and calculates scores based on selected features.
 
