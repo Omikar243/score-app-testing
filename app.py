@@ -38,10 +38,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-def normalize_series(series, new_min=1, new_max=1000):
+def normalize_series(series, new_min=1, new_max=1000, inverse=True):
+    """Normalize series with option to inverse (higher values = lower score)"""
     if series.max() == series.min():
-        return pd.Series(new_min, index=series.index)
-    norm = (series - series.min()) / (series.max() - series.min())
+        return pd.Series(new_min if inverse else new_max, index=series.index)
+    
+    if inverse:
+        
+        norm = (series.max() - series) / (series.max() - series.min())
+    else:
+        
+        norm = (series - series.min()) / (series.max() - series.min())
+    
     return norm * (new_max - new_min) + new_min
 
 def generate_feature_data(n, dist_type, params):
@@ -76,25 +84,63 @@ def generate_synthetic_data(n, feature_settings):
         data[feature] = generate_feature_data(n, dist_type, params)
     df = pd.DataFrame(data)
     df.insert(0, "ID", range(1, n+1))
-    norm_df = df.copy()
-    for col in df.columns:
-        if col != "ID":
-            norm_df[col] = normalize_series(df[col], 1, 1000)
-    return df, norm_df
+    return df
 
-def compute_weighted_score(raw_df, norm_df, weights):
-    norm_df = norm_df.copy()
+def compute_feature_stats(df):
+    """Compute statistics for each feature for baseline comparison"""
+    feature_stats = {}
+    for col in df.columns:
+        if col not in ["ID", "Weighted_Score", "Rank", "Z_Score"]:
+            feature_stats[col] = {
+                'mean': df[col].mean(),
+                'median': df[col].median(),
+                'std': df[col].std(),
+                'min': df[col].min(),
+                'max': df[col].max()
+            }
+    return feature_stats
+
+def compute_weighted_score(raw_df, weights, inverse=True):
+    """Compute weighted score with option for inverse relationship"""
+    df = raw_df.copy()
+    
+    
+    norm_values = {}
+    z_scores = {}
+    for col in df.columns:
+        if col not in ["ID", "Weighted_Score", "Rank", "Z_Score"]:
+            
+            norm_values[col] = normalize_series(df[col], 1, 1000, inverse=inverse)
+            
+            
+            z_scores[col] = (df[col] - df[col].mean()) / df[col].std()
+            if inverse:
+                
+                z_scores[col] = -z_scores[col]
+            
+            
+            df[f"{col}_normalized"] = norm_values[col]
+            df[f"{col}_z_score"] = z_scores[col]
+    
+    
     weighted_sum = 0
+    feature_contributions = {}
     for key, weight in weights.items():
-        if key in norm_df.columns:
-            weighted_sum += norm_df[key] * weight
-    norm_df['Weighted_Score'] = weighted_sum
-    norm_df['Rank'] = norm_df['Weighted_Score'].rank(method='min', ascending=False).astype(int)
-    final_df = raw_df.copy()
-    final_df['Weighted_Score'] = norm_df['Weighted_Score']
-    final_df['Rank'] = norm_df['Rank']
-    final_df.sort_values('Rank', inplace=True)
-    return final_df
+        if key in norm_values:
+            contribution = norm_values[key] * weight
+            weighted_sum += contribution
+            feature_contributions[key] = contribution
+            df[f"{key}_contribution"] = contribution
+    
+    
+    df['Weighted_Score'] = weighted_sum
+    df['Z_Score'] = sum(z_scores[key] * weights[key] for key in weights if key in z_scores)
+    df['Rank'] = df['Weighted_Score'].rank(method='min', ascending=False).astype(int)
+    
+    
+    df.sort_values('Rank', inplace=True)
+    
+    return df, feature_contributions
 
 def render_html_table(df):
     df_round = df.copy()
@@ -141,73 +187,103 @@ def feature_distribution_ui(feature_name, default_min=1, default_max=1000):
 
 st.title("Resource Sustainability Consumption Dashboard")
 st.markdown("Enhance your synthetic data and rank users based on weighted resource consumption.")
+
+
+st.sidebar.markdown("## Data Configuration")
 data_source = st.sidebar.radio("Select Data Source", ["Generate Synthetic Data", "Upload CSV Data"], key="data_source")
+
+
+scoring_method = st.sidebar.radio(
+    "Scoring Method",
+    ["Inverse (Higher usage = Lower score)", "Direct (Higher usage = Higher score)"],
+    key="scoring_method"
+)
+inverse_scoring = scoring_method == "Inverse (Higher usage = Lower score)"
+
 if data_source == "Generate Synthetic Data":
     n_users = st.sidebar.number_input("Number of Individuals", min_value=1, value=100, step=1)
+    
     st.sidebar.markdown("## Set Feature Distributions")
     st.sidebar.markdown("### Electricity Consumption")
     dist_elec, params_elec = feature_distribution_ui("Electricity", default_min=100, default_max=1000)
+    
     st.sidebar.markdown("### Water Consumption")
     dist_water, params_water = feature_distribution_ui("Water", default_min=200, default_max=600)
+    
+    
     optional_features_settings = {}
     include_f1 = st.sidebar.checkbox("Include Feature-1", value=True, key="include_f1")
     if include_f1:
         custom_name_f1 = st.sidebar.text_input("Rename Feature-1", value="Feature-1", key="name_f1")
         dist_f1, params_f1 = feature_distribution_ui(custom_name_f1, default_min=1, default_max=100)
         optional_features_settings[custom_name_f1] = (dist_f1, params_f1)
+    
     include_f2 = st.sidebar.checkbox("Include Feature-2", value=True, key="include_f2")
     if include_f2:
         custom_name_f2 = st.sidebar.text_input("Rename Feature-2", value="Feature-2", key="name_f2")
         dist_f2, params_f2 = feature_distribution_ui(custom_name_f2, default_min=1, default_max=100)
         optional_features_settings[custom_name_f2] = (dist_f2, params_f2)
+    
     include_f3 = st.sidebar.checkbox("Include Feature-3", value=True, key="include_f3")
     if include_f3:
         custom_name_f3 = st.sidebar.text_input("Rename Feature-3", value="Feature-3", key="name_f3")
         dist_f3, params_f3 = feature_distribution_ui(custom_name_f3, default_min=1, default_max=100)
         optional_features_settings[custom_name_f3] = (dist_f3, params_f3)
+    
     include_f4 = st.sidebar.checkbox("Include Feature-4", value=True, key="include_f4")
     if include_f4:
         custom_name_f4 = st.sidebar.text_input("Rename Feature-4", value="Feature-4", key="name_f4")
         dist_f4, params_f4 = feature_distribution_ui(custom_name_f4, default_min=1, default_max=100)
         optional_features_settings[custom_name_f4] = (dist_f4, params_f4)
+    
     feature_settings = {
         "Electricity": (dist_elec, params_elec),
         "Water": (dist_water, params_water)
     }
     feature_settings.update(optional_features_settings)
+    
     if st.sidebar.button("Generate Synthetic Data"):
-        raw, norm = generate_synthetic_data(n_users, feature_settings)
+        raw = generate_synthetic_data(n_users, feature_settings)
         st.session_state.synth_data_raw = raw
-        st.session_state.synth_data_norm = norm
+        
+        
         feature_constraints = {}
         for feat, setting in feature_settings.items():
             params = setting[1]
             feature_constraints[feat] = (params['min'], params['max'])
         st.session_state.feature_constraints = feature_constraints
+        
+        # Compute baseline stats
+        st.session_state.feature_stats = compute_feature_stats(raw)
+        
         st.sidebar.success("Synthetic data generated successfully!")
+
 elif data_source == "Upload CSV Data":
     st.sidebar.markdown("### Upload your CSV file")
     uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv", key="uploaded_csv")
+    
     if st.sidebar.button("Load Data"):
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
             st.session_state.synth_data_raw = df
-            norm_df = df.copy()
-            for col in df.columns:
-                if col != "ID":
-                    norm_df[col] = normalize_series(df[col], 1, 1000)
-            st.session_state.synth_data_norm = norm_df
+            
+            # Compute feature constraints
             constraints = {}
             for col in df.columns:
                 if col != "ID":
                     constraints[col] = (df[col].min(), df[col].max())
             st.session_state.feature_constraints = constraints
+            
+            
+            st.session_state.feature_stats = compute_feature_stats(df)
+            
             st.sidebar.success("Data loaded successfully!")
         else:
             st.sidebar.error("Please upload a CSV file.")
     template_df = pd.DataFrame(columns=["ID", "Electricity", "Water", "Feature-1", "Feature-2", "Feature-3", "Feature-4"])
     csv_template = template_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("Download CSV Template", data=csv_template, file_name="template.csv", mime="text/csv")
+
 if "synth_data_raw" in st.session_state:
     st.markdown("## Data Preview")
     html_table = render_html_table(st.session_state.synth_data_raw)
@@ -226,7 +302,7 @@ if "synth_data_raw" in st.session_state:
         st.error("Weights must sum exactly to 1!")
     else:
         if st.button("Generate Weighted Score"):
-            final_df = compute_weighted_score(st.session_state.synth_data_raw, st.session_state.synth_data_norm, weights)
+            final_df, feature_contributions = compute_weighted_score(st.session_state.synth_data_raw, weights, inverse=inverse_scoring)
             st.session_state.scored_data = final_df
             st.session_state.weights = weights
             st.success("Weighted score and ranking generated!")
@@ -249,6 +325,7 @@ if "synth_data_raw" in st.session_state:
     test_mode = st.radio("Select Input Mode for New Customer", ["Manual Entry", "CSV Upload"], key="test_mode")
     features = [col for col in st.session_state.synth_data_raw.columns if col not in ["ID", "Weighted_Score", "Rank"]]
     if test_mode == "Manual Entry":
+   
         st.markdown("### Enter Customer Feature Values")
         new_customer = {}
         for feat in features:
@@ -257,8 +334,11 @@ if "synth_data_raw" in st.session_state:
             else:
                 constraint_min = st.session_state.synth_data_raw[feat].min()
                 constraint_max = st.session_state.synth_data_raw[feat].max()
-            new_customer[feat] = st.number_input(f"{feat} (Allowed range: {constraint_min} - {constraint_max})", value=constraint_min, key=f"test_{feat}")
+            new_customer[feat] = st.number_input(f"{feat} (Allowed range: {constraint_min} - {constraint_max})", 
+                                                value=constraint_min, key=f"test_{feat}")
+            
         if st.button("Evaluate Customer"):
+            
             norm_values = {}
             for feat in features:
                 if "feature_constraints" in st.session_state and feat in st.session_state.feature_constraints:
@@ -266,21 +346,31 @@ if "synth_data_raw" in st.session_state:
                 else:
                     constraint_min = st.session_state.synth_data_raw[feat].min()
                     constraint_max = st.session_state.synth_data_raw[feat].max()
+                
                 val = new_customer[feat]
                 if val < constraint_min:
                     st.info(f"{feat} value is below the allowed minimum of {constraint_min}.")
                 elif val > constraint_max:
                     st.info(f"{feat} value is above the allowed maximum of {constraint_max}.")
+                
+                
                 if constraint_max == constraint_min:
-                    norm_val = 1
+                    norm_val = 1000 if not inverse_scoring else 1
                 else:
-                    norm_val = (val - constraint_min) / (constraint_max - constraint_min) * (1000 - 1) + 1
-                norm_values[feat] = norm_val
+                    if inverse_scoring:
+                        
+                        norm_val = (constraint_max - val) / (constraint_max - constraint_min) * 999 + 1
+                    else:
+                        
+                        norm_val = (val - constraint_min) / (constraint_max - constraint_min) * 999 + 1
+                    norm_values[feat] = norm_val
             if "weights" not in st.session_state:
                 st.error("Please generate weighted scores first.")
             else:
                 weights = st.session_state.weights
                 score = sum(norm_values[feat] * weights.get(feat, 0) for feat in features)
+                if "scored_data" not in st.session_state:
+                    st.error("Please generate weighted scores first.")
                 existing_scores = st.session_state.scored_data["Weighted_Score"]
                 rank = (existing_scores > score).sum() + 1
                 st.success(f"Customer Score: {score:.2f} (Estimated Rank: {rank})")
