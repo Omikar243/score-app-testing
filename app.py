@@ -44,10 +44,8 @@ def normalize_series(series, new_min=1, new_max=1000, inverse=True):
         return pd.Series(new_min if inverse else new_max, index=series.index)
     
     if inverse:
-        
         norm = (series.max() - series) / (series.max() - series.min())
     else:
-        
         norm = (series - series.min()) / (series.max() - series.min())
     
     return norm * (new_max - new_min) + new_min
@@ -104,24 +102,16 @@ def compute_weighted_score(raw_df, weights, inverse=True):
     """Compute weighted score with option for inverse relationship"""
     df = raw_df.copy()
     
-    
     norm_values = {}
     z_scores = {}
     for col in df.columns:
         if col not in ["ID", "Weighted_Score", "Rank", "Z_Score"]:
-            
             norm_values[col] = normalize_series(df[col], 1, 1000, inverse=inverse)
-            
-            
             z_scores[col] = (df[col] - df[col].mean()) / df[col].std()
             if inverse:
-                
                 z_scores[col] = -z_scores[col]
-            
-            
             df[f"{col}_normalized"] = norm_values[col]
             df[f"{col}_z_score"] = z_scores[col]
-    
     
     weighted_sum = 0
     feature_contributions = {}
@@ -132,11 +122,9 @@ def compute_weighted_score(raw_df, weights, inverse=True):
             feature_contributions[key] = contribution
             df[f"{key}_contribution"] = contribution
     
-    
     df['Weighted_Score'] = weighted_sum
     df['Z_Score'] = sum(z_scores[key] * weights[key] for key in weights if key in z_scores)
     df['Rank'] = df['Weighted_Score'].rank(method='min', ascending=False).astype(int)
-    
     
     df.sort_values('Rank', inplace=True)
     
@@ -188,10 +176,8 @@ def feature_distribution_ui(feature_name, default_min=1, default_max=1000):
 st.title("Resource Sustainability Consumption Dashboard")
 st.markdown("Enhance your synthetic data and rank users based on weighted resource consumption.")
 
-
 st.sidebar.markdown("## Data Configuration")
 data_source = st.sidebar.radio("Select Data Source", ["Generate Synthetic Data", "Upload CSV Data"], key="data_source")
-
 
 scoring_method = st.sidebar.radio(
     "Scoring Method",
@@ -209,7 +195,6 @@ if data_source == "Generate Synthetic Data":
     
     st.sidebar.markdown("### Water Consumption")
     dist_water, params_water = feature_distribution_ui("Water", default_min=200, default_max=600)
-    
     
     optional_features_settings = {}
     include_f1 = st.sidebar.checkbox("Include Feature-1", value=True, key="include_f1")
@@ -246,14 +231,13 @@ if data_source == "Generate Synthetic Data":
         raw = generate_synthetic_data(n_users, feature_settings)
         st.session_state.synth_data_raw = raw
         
-        
         feature_constraints = {}
         for feat, setting in feature_settings.items():
             params = setting[1]
             feature_constraints[feat] = (params['min'], params['max'])
         st.session_state.feature_constraints = feature_constraints
         
-        # Compute baseline stats
+        
         st.session_state.feature_stats = compute_feature_stats(raw)
         
         st.sidebar.success("Synthetic data generated successfully!")
@@ -267,13 +251,12 @@ elif data_source == "Upload CSV Data":
             df = pd.read_csv(uploaded_file)
             st.session_state.synth_data_raw = df
             
-            # Compute feature constraints
+            
             constraints = {}
             for col in df.columns:
                 if col != "ID":
                     constraints[col] = (df[col].min(), df[col].max())
             st.session_state.feature_constraints = constraints
-            
             
             st.session_state.feature_stats = compute_feature_stats(df)
             
@@ -321,11 +304,10 @@ if "synth_data_raw" in st.session_state:
             sns.histplot(st.session_state.scored_data["Weighted_Score"], bins=30, kde=True, ax=ax)
             ax.set_title("Distribution of Weighted Score")
             st.pyplot(fig)
-    st.markdown("## Test New Customer ")
+    st.markdown("## Test New Customer")
     test_mode = st.radio("Select Input Mode for New Customer", ["Manual Entry", "CSV Upload"], key="test_mode")
     features = [col for col in st.session_state.synth_data_raw.columns if col not in ["ID", "Weighted_Score", "Rank"]]
     if test_mode == "Manual Entry":
-   
         st.markdown("### Enter Customer Feature Values")
         new_customer = {}
         for feat in features:
@@ -338,7 +320,6 @@ if "synth_data_raw" in st.session_state:
                                                 value=constraint_min, key=f"test_{feat}")
             
         if st.button("Evaluate Customer"):
-            
             norm_values = {}
             for feat in features:
                 if "feature_constraints" in st.session_state and feat in st.session_state.feature_constraints:
@@ -353,17 +334,16 @@ if "synth_data_raw" in st.session_state:
                 elif val > constraint_max:
                     st.info(f"{feat} value is above the allowed maximum of {constraint_max}.")
                 
-                
                 if constraint_max == constraint_min:
                     norm_val = 1000 if not inverse_scoring else 1
+                    norm_values[feat] = norm_val
                 else:
                     if inverse_scoring:
-                        
                         norm_val = (constraint_max - val) / (constraint_max - constraint_min) * 999 + 1
                     else:
-                        
                         norm_val = (val - constraint_min) / (constraint_max - constraint_min) * 999 + 1
                     norm_values[feat] = norm_val
+                    
             if "weights" not in st.session_state:
                 st.error("Please generate weighted scores first.")
             else:
@@ -374,11 +354,24 @@ if "synth_data_raw" in st.session_state:
                 existing_scores = st.session_state.scored_data["Weighted_Score"]
                 rank = (existing_scores > score).sum() + 1
                 st.success(f"Customer Score: {score:.2f} (Estimated Rank: {rank})")
+                
+                
                 contributions = {feat: norm_values[feat] * weights.get(feat, 0) for feat in features}
                 sorted_contrib = sorted(contributions.items(), key=lambda x: x[1], reverse=True)
+                
                 st.markdown("**Feature Contributions:**")
                 for feat, contrib in sorted_contrib:
-                    st.write(f"{feat}: {contrib:.2f}")
+                    percentage = (contrib / score * 100) if score != 0 else 0
+                    st.write(f"{feat}: {contrib:.2f} ({percentage:.2f}%)")
+                
+                
+                fig, ax = plt.subplots()
+                labels = list(contributions.keys())
+                sizes = list(contributions.values())
+                ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
+                ax.axis('equal')
+                st.pyplot(fig)
+                
     else:
         new_user_template_df = pd.DataFrame(columns=features)
         csv_new_user_template = new_user_template_df.to_csv(index=False).encode('utf-8')
