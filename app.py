@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import io
 
 st.set_page_config(page_title="Resource Sustainability Dashboard", layout="wide")
 st.markdown(
@@ -130,13 +131,6 @@ def compute_weighted_score(raw_df, weights, inverse=True):
     
     return df, feature_contributions
 
-def render_html_table(df):
-    df_round = df.copy()
-    numeric_cols = df_round.select_dtypes(include=['number']).columns
-    df_round[numeric_cols] = df_round[numeric_cols].round(2)
-    html_table = df_round.to_html(index=False, classes="dataframe", border=0)
-    return f'<div class="dataframe-container">{html_table}</div>'
-
 def feature_distribution_ui(feature_name, default_min=1, default_max=1000):
     st.markdown(f"#### {feature_name} Settings")
     dist_type = st.selectbox(
@@ -172,6 +166,95 @@ def feature_distribution_ui(feature_name, default_min=1, default_max=1000):
         params['min'] = st.number_input(f"{feature_name} Minimum", value=default_min, key=f"{feature_name}_min")
         params['max'] = st.number_input(f"{feature_name} Maximum", value=default_max, key=f"{feature_name}_max")
     return dist_type, params
+
+def export_feature_details():
+    """
+    Export feature details including distribution settings and synthetic data
+    """
+    # Prepare feature distribution details
+    if "feature_settings" in st.session_state:
+        distribution_details = []
+        for feature, (dist_type, params) in st.session_state.feature_settings.items():
+            details = {
+                'Feature': feature,
+                'Distribution Type': dist_type,
+                **params
+            }
+            distribution_details.append(details)
+        
+        
+        distribution_df = pd.DataFrame(distribution_details)
+        
+        
+        export_options = st.radio("Select Export Type", 
+                                  ["Feature Distribution Settings", 
+                                   "Synthetic Data", 
+                                   "Weighted Scored Data",
+                                   "Full Dataset with Details"])
+        
+        if export_options == "Feature Distribution Settings":
+           
+            csv = distribution_df.to_csv(index=False)
+            st.download_button(
+                label="Download Feature Distribution Settings",
+                data=csv,
+                file_name="feature_distribution_settings.csv",
+                mime="text/csv"
+            )
+        
+        elif export_options == "Synthetic Data":
+            if "synth_data_raw" in st.session_state:
+                raw_csv = st.session_state.synth_data_raw.to_csv(index=False)
+                st.download_button(
+                    label="Download Synthetic Data",
+                    data=raw_csv,
+                    file_name="synthetic_data.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("No synthetic data generated yet.")
+        
+        elif export_options == "Weighted Scored Data":
+            if "scored_data" in st.session_state:
+                scored_csv = st.session_state.scored_data.to_csv(index=False)
+                st.download_button(
+                    label="Download Weighted Scored Data",
+                    data=scored_csv,
+                    file_name="weighted_scored_data.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("No weighted scores generated yet.")
+        
+        elif export_options == "Full Dataset with Details":
+            
+            full_export_df = distribution_df.copy()
+            
+            if "synth_data_raw" in st.session_state:
+                synthetic_df = st.session_state.synth_data_raw.copy()
+                
+                if "scored_data" in st.session_state:
+                    synthetic_df['Weighted_Score'] = st.session_state.scored_data['Weighted_Score']
+                    synthetic_df['Rank'] = st.session_state.scored_data['Rank']
+                
+                full_export_csv = synthetic_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Full Dataset with Details",
+                    data=full_export_csv,
+                    file_name="full_dataset_with_details.csv",
+                    mime="text/csv"
+                )
+                
+                
+                st.write("Distribution Details:", distribution_df)
+            else:
+                st.warning("No synthetic data generated yet.")
+
+def render_sortable_table(df):
+    """
+    Render a sortable table using standard Streamlit methods
+    """
+    st.dataframe(df, use_container_width=True)
 
 st.title("Resource Sustainability Consumption Dashboard")
 st.markdown("Enhance your synthetic data and rank users based on weighted resource consumption.")
@@ -237,8 +320,8 @@ if data_source == "Generate Synthetic Data":
             feature_constraints[feat] = (params['min'], params['max'])
         st.session_state.feature_constraints = feature_constraints
         
-        
         st.session_state.feature_stats = compute_feature_stats(raw)
+        st.session_state.feature_settings = feature_settings
         
         st.sidebar.success("Synthetic data generated successfully!")
 
@@ -250,7 +333,6 @@ elif data_source == "Upload CSV Data":
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
             st.session_state.synth_data_raw = df
-            
             
             constraints = {}
             for col in df.columns:
@@ -269,8 +351,7 @@ elif data_source == "Upload CSV Data":
 
 if "synth_data_raw" in st.session_state:
     st.markdown("## Data Preview")
-    html_table = render_html_table(st.session_state.synth_data_raw)
-    st.markdown(html_table, unsafe_allow_html=True)
+    render_sortable_table(st.session_state.synth_data_raw)
     st.markdown("---")
     st.markdown("## Weighted Score Settings")
     features_for_weight = {col: None for col in st.session_state.synth_data_raw.columns if col not in ["ID"]}
@@ -290,8 +371,8 @@ if "synth_data_raw" in st.session_state:
             st.session_state.weights = weights
             st.success("Weighted score and ranking generated!")
             st.markdown("## Ranked Individuals Based on Weighted Score")
-            final_html = render_html_table(st.session_state.scored_data.reset_index(drop=True))
-            st.markdown(final_html, unsafe_allow_html=True)
+            render_sortable_table(st.session_state.scored_data.reset_index(drop=True))
+    
     if st.checkbox("Show Distribution Graphs"):
         for col in st.session_state.synth_data_raw.columns:
             if col != "ID":
@@ -304,6 +385,12 @@ if "synth_data_raw" in st.session_state:
             sns.histplot(st.session_state.scored_data["Weighted_Score"], bins=30, kde=True, ax=ax)
             ax.set_title("Distribution of Weighted Score")
             st.pyplot(fig)
+    
+    st.markdown("---")
+    st.markdown("## Export and Analysis Tools")
+    export_feature_details()
+
+
     st.markdown("## Test New Customer")
     test_mode = st.radio("Select Input Mode for New Customer", ["Manual Entry", "CSV Upload"], key="test_mode")
     features = [col for col in st.session_state.synth_data_raw.columns if col not in ["ID", "Weighted_Score", "Rank"]]
