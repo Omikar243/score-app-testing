@@ -99,37 +99,52 @@ def compute_feature_stats(df):
             }
     return feature_stats
 
-def compute_weighted_score(raw_df, weights, inverse=True):
-    """Compute weighted score with option for inverse relationship"""
+def compute_weighted_score(raw_df, weights, inverse_scoring=True, cap_z=True):
+    """
+    New scoring methodology:
+    1. For each feature x_i, compute the z-score: z_i = (x_i - mean) / std.
+       - If baseline values are provided (in st.session_state.baseline_values), use them.
+       - Otherwise, compute mean and std from the data.
+    2. Cap each z_i between -1 and 1 if selected.
+    3. Compute S1 = sum (w_i * z_i).
+    4. Translate S1 to final score S:
+         If inverse_scoring:
+             S = 500 - 100 * S1   (so that S1=0 gives S=500, S1=+5 gives S≈0, S1=-5 gives S≈1000)
+         Else:
+             S = 500 + 100 * S1
+       Clip S to be between 0 and 1000.
+    5. Rank individuals based on S.
+    """
     df = raw_df.copy()
-    
-    norm_values = {}
-    z_scores = {}
+    feature_z = {}
     for col in df.columns:
         if col not in ["ID", "Weighted_Score", "Rank", "Z_Score"]:
-            norm_values[col] = normalize_series(df[col], 1, 1000, inverse=inverse)
-            z_scores[col] = (df[col] - df[col].mean()) / df[col].std()
-            if inverse:
-                z_scores[col] = -z_scores[col]
-            df[f"{col}_normalized"] = norm_values[col]
-            df[f"{col}_z_score"] = z_scores[col]
-    
-    weighted_sum = 0
-    feature_contributions = {}
-    for key, weight in weights.items():
-        if key in norm_values:
-            contribution = norm_values[key] * weight
-            weighted_sum += contribution
-            feature_contributions[key] = contribution
-            df[f"{key}_contribution"] = contribution
-    
-    df['Weighted_Score'] = weighted_sum
-    df['Z_Score'] = sum(z_scores[key] * weights[key] for key in weights if key in z_scores)
+            if "baseline_values" in st.session_state and col in st.session_state.baseline_values:
+                base_mean, base_std = st.session_state.baseline_values[col]
+                mean_val, std_val = base_mean, base_std
+            else:
+                mean_val, std_val = df[col].mean(), df[col].std()
+            if std_val == 0:
+                z = 0
+            else:
+                z = (df[col] - mean_val) / std_val
+            if cap_z:
+                z_used = np.clip(z, -1, 1)
+            else:
+                z_used = z
+            feature_z[col] = z_used
+            df[f"{col}_z_score"] = z_used
+    S1 = sum(feature_z[col] * weights.get(col, 0) for col in feature_z)
+    if inverse_scoring:
+        final_score = 500 - 100 * S1
+    else:
+        final_score = 500 + 100 * S1
+    final_score = np.clip(final_score, 0, 1000)
+    df['Weighted_Score'] = final_score
+    df['Weighted_Z_Score'] = S1
     df['Rank'] = df['Weighted_Score'].rank(method='min', ascending=False).astype(int)
-    
     df.sort_values('Rank', inplace=True)
-    
-    return df, feature_contributions
+    return df
 
 def feature_distribution_ui(feature_name, default_min=1, default_max=1000):
     st.markdown(f"#### {feature_name} Settings")
@@ -171,7 +186,6 @@ def export_feature_details():
     """
     Export feature details including distribution settings and synthetic data
     """
-    # Prepare feature distribution details
     if "feature_settings" in st.session_state:
         distribution_details = []
         for feature, (dist_type, params) in st.session_state.feature_settings.items():
@@ -181,19 +195,13 @@ def export_feature_details():
                 **params
             }
             distribution_details.append(details)
-        
-        
         distribution_df = pd.DataFrame(distribution_details)
-        
-        
         export_options = st.radio("Select Export Type", 
                                   ["Feature Distribution Settings", 
                                    "Synthetic Data", 
                                    "Weighted Scored Data",
                                    "Full Dataset with Details"])
-        
         if export_options == "Feature Distribution Settings":
-           
             csv = distribution_df.to_csv(index=False)
             st.download_button(
                 label="Download Feature Distribution Settings",
@@ -201,7 +209,6 @@ def export_feature_details():
                 file_name="feature_distribution_settings.csv",
                 mime="text/csv"
             )
-        
         elif export_options == "Synthetic Data":
             if "synth_data_raw" in st.session_state:
                 raw_csv = st.session_state.synth_data_raw.to_csv(index=False)
@@ -213,7 +220,6 @@ def export_feature_details():
                 )
             else:
                 st.warning("No synthetic data generated yet.")
-        
         elif export_options == "Weighted Scored Data":
             if "scored_data" in st.session_state:
                 scored_csv = st.session_state.scored_data.to_csv(index=False)
@@ -225,18 +231,13 @@ def export_feature_details():
                 )
             else:
                 st.warning("No weighted scores generated yet.")
-        
         elif export_options == "Full Dataset with Details":
-            
             full_export_df = distribution_df.copy()
-            
             if "synth_data_raw" in st.session_state:
                 synthetic_df = st.session_state.synth_data_raw.copy()
-                
                 if "scored_data" in st.session_state:
                     synthetic_df['Weighted_Score'] = st.session_state.scored_data['Weighted_Score']
                     synthetic_df['Rank'] = st.session_state.scored_data['Rank']
-                
                 full_export_csv = synthetic_df.to_csv(index=False)
                 st.download_button(
                     label="Download Full Dataset with Details",
@@ -244,8 +245,6 @@ def export_feature_details():
                     file_name="full_dataset_with_details.csv",
                     mime="text/csv"
                 )
-                
-                
                 st.write("Distribution Details:", distribution_df)
             else:
                 st.warning("No synthetic data generated yet.")
@@ -258,96 +257,94 @@ def render_sortable_table(df):
 
 st.title("Resource Sustainability Consumption Dashboard")
 st.markdown("Enhance your synthetic data and rank users based on weighted resource consumption.")
-
 st.sidebar.markdown("## Data Configuration")
 data_source = st.sidebar.radio("Select Data Source", ["Generate Synthetic Data", "Upload CSV Data"], key="data_source")
-
 scoring_method = st.sidebar.radio(
     "Scoring Method",
-    ["Inverse (Higher usage = Lower score)", "Direct (Higher usage = Higher score)"],
+    ["Inverse (Higher usage = Lower score)"],  # , "Direct (Higher usage = Higher score)"
     key="scoring_method"
+    
 )
 inverse_scoring = scoring_method == "Inverse (Higher usage = Lower score)"
 
 if data_source == "Generate Synthetic Data":
     n_users = st.sidebar.number_input("Number of Individuals", min_value=1, value=100, step=1)
-    
     st.sidebar.markdown("## Set Feature Distributions")
     st.sidebar.markdown("### Electricity Consumption")
     dist_elec, params_elec = feature_distribution_ui("Electricity", default_min=100, default_max=1000)
-    
     st.sidebar.markdown("### Water Consumption")
     dist_water, params_water = feature_distribution_ui("Water", default_min=200, default_max=600)
-    
     optional_features_settings = {}
     include_f1 = st.sidebar.checkbox("Include Feature-1", value=True, key="include_f1")
     if include_f1:
         custom_name_f1 = st.sidebar.text_input("Rename Feature-1", value="Feature-1", key="name_f1")
         dist_f1, params_f1 = feature_distribution_ui(custom_name_f1, default_min=1, default_max=100)
         optional_features_settings[custom_name_f1] = (dist_f1, params_f1)
-    
     include_f2 = st.sidebar.checkbox("Include Feature-2", value=True, key="include_f2")
     if include_f2:
         custom_name_f2 = st.sidebar.text_input("Rename Feature-2", value="Feature-2", key="name_f2")
         dist_f2, params_f2 = feature_distribution_ui(custom_name_f2, default_min=1, default_max=100)
         optional_features_settings[custom_name_f2] = (dist_f2, params_f2)
-    
     include_f3 = st.sidebar.checkbox("Include Feature-3", value=True, key="include_f3")
     if include_f3:
         custom_name_f3 = st.sidebar.text_input("Rename Feature-3", value="Feature-3", key="name_f3")
         dist_f3, params_f3 = feature_distribution_ui(custom_name_f3, default_min=1, default_max=100)
         optional_features_settings[custom_name_f3] = (dist_f3, params_f3)
-    
     include_f4 = st.sidebar.checkbox("Include Feature-4", value=True, key="include_f4")
     if include_f4:
         custom_name_f4 = st.sidebar.text_input("Rename Feature-4", value="Feature-4", key="name_f4")
         dist_f4, params_f4 = feature_distribution_ui(custom_name_f4, default_min=1, default_max=100)
         optional_features_settings[custom_name_f4] = (dist_f4, params_f4)
-    
     feature_settings = {
         "Electricity": (dist_elec, params_elec),
         "Water": (dist_water, params_water)
     }
     feature_settings.update(optional_features_settings)
-    
     if st.sidebar.button("Generate Synthetic Data"):
         raw = generate_synthetic_data(n_users, feature_settings)
         st.session_state.synth_data_raw = raw
-        
         feature_constraints = {}
         for feat, setting in feature_settings.items():
             params = setting[1]
             feature_constraints[feat] = (params['min'], params['max'])
         st.session_state.feature_constraints = feature_constraints
-        
         st.session_state.feature_stats = compute_feature_stats(raw)
         st.session_state.feature_settings = feature_settings
-        
         st.sidebar.success("Synthetic data generated successfully!")
-
 elif data_source == "Upload CSV Data":
     st.sidebar.markdown("### Upload your CSV file")
     uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv", key="uploaded_csv")
-    
     if st.sidebar.button("Load Data"):
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
             st.session_state.synth_data_raw = df
-            
             constraints = {}
             for col in df.columns:
                 if col != "ID":
                     constraints[col] = (df[col].min(), df[col].max())
             st.session_state.feature_constraints = constraints
-            
             st.session_state.feature_stats = compute_feature_stats(df)
-            
             st.sidebar.success("Data loaded successfully!")
         else:
             st.sidebar.error("Please upload a CSV file.")
     template_df = pd.DataFrame(columns=["ID", "Electricity", "Water", "Feature-1", "Feature-2", "Feature-3", "Feature-4"])
     csv_template = template_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("Download CSV Template", data=csv_template, file_name="template.csv", mime="text/csv")
+
+if "synth_data_raw" in st.session_state:
+    st.sidebar.markdown("## Baseline Values for Scoring")
+    use_baseline = st.sidebar.radio("Use Baseline Values?", ["No", "Yes"], key="use_baseline")
+    if use_baseline == "Yes":
+        baseline_values = {}
+        for feat in [col for col in st.session_state.synth_data_raw.columns if col not in ["ID", "Weighted_Score", "Rank", "Z_Score"]]:
+            default_mean = float(st.session_state.synth_data_raw[feat].mean())
+            default_std = float(st.session_state.synth_data_raw[feat].std())
+            baseline_mean = st.sidebar.number_input(f"Baseline Mean for {feat}", value=default_mean, key=f"baseline_mean_{feat}")
+            baseline_std = st.sidebar.number_input(f"Baseline Std for {feat}", value=default_std, key=f"baseline_std_{feat}")
+            baseline_values[feat] = (baseline_mean, baseline_std)
+        st.session_state.baseline_values = baseline_values
+    st.sidebar.markdown("## Z-Score Capping")
+    cap_z_option = st.sidebar.radio("Cap Z-scores?", ["Yes", "No"], key="cap_z")
 
 if "synth_data_raw" in st.session_state:
     st.markdown("## Data Preview")
@@ -366,7 +363,7 @@ if "synth_data_raw" in st.session_state:
         st.error("Weights must sum exactly to 1!")
     else:
         if st.button("Generate Weighted Score"):
-            final_df, feature_contributions = compute_weighted_score(st.session_state.synth_data_raw, weights, inverse=inverse_scoring)
+            final_df = compute_weighted_score(st.session_state.synth_data_raw, weights, inverse_scoring=inverse_scoring, cap_z=(cap_z_option=="Yes"))
             st.session_state.scored_data = final_df
             st.session_state.weights = weights
             st.success("Weighted score and ranking generated!")
@@ -389,8 +386,6 @@ if "synth_data_raw" in st.session_state:
     st.markdown("---")
     st.markdown("## Export and Analysis Tools")
     export_feature_details()
-
-
     st.markdown("## Test New Customer")
     test_mode = st.radio("Select Input Mode for New Customer", ["Manual Entry", "CSV Upload"], key="test_mode")
     features = [col for col in st.session_state.synth_data_raw.columns if col not in ["ID", "Weighted_Score", "Rank"]]
@@ -405,65 +400,62 @@ if "synth_data_raw" in st.session_state:
                 constraint_max = st.session_state.synth_data_raw[feat].max()
             new_customer[feat] = st.number_input(f"{feat} (Allowed range: {constraint_min} - {constraint_max})", 
                                                 value=constraint_min, key=f"test_{feat}")
-            
         if st.button("Evaluate Customer"):
-            norm_values = {}
+            feature_z_new = {}
             for feat in features:
                 if "feature_constraints" in st.session_state and feat in st.session_state.feature_constraints:
                     constraint_min, constraint_max = st.session_state.feature_constraints[feat]
                 else:
                     constraint_min = st.session_state.synth_data_raw[feat].min()
                     constraint_max = st.session_state.synth_data_raw[feat].max()
-                
                 val = new_customer[feat]
                 if val < constraint_min:
                     st.info(f"{feat} value is below the allowed minimum of {constraint_min}.")
                 elif val > constraint_max:
                     st.info(f"{feat} value is above the allowed maximum of {constraint_max}.")
-                
-                if constraint_max == constraint_min:
-                    norm_val = 1000 if not inverse_scoring else 1
-                    norm_values[feat] = norm_val
+                if "baseline_values" in st.session_state and feat in st.session_state.baseline_values:
+                    mean_val, std_val = st.session_state.baseline_values[feat]
                 else:
-                    if inverse_scoring:
-                        norm_val = (constraint_max - val) / (constraint_max - constraint_min) * 999 + 1
-                    else:
-                        norm_val = (val - constraint_min) / (constraint_max - constraint_min) * 999 + 1
-                    norm_values[feat] = norm_val
-                    
-            if "weights" not in st.session_state:
+                    mean_val = st.session_state.synth_data_raw[feat].mean()
+                    std_val = st.session_state.synth_data_raw[feat].std()
+                if std_val == 0:
+                    z = 0
+                else:
+                    z = (val - mean_val) / std_val
+                if cap_z_option == "Yes":
+                    z_used = np.clip(z, -1, 1)
+                else:
+                    z_used = z
+                feature_z_new[feat] = z_used
+            S1_new = sum(feature_z_new[feat] * st.session_state.weights.get(feat, 0) for feat in features)
+            if inverse_scoring:
+                score = 500 - 100 * S1_new
+            else:
+                score = 500 + 100 * S1_new
+            score = np.clip(score, 0, 1000)
+            if "scored_data" not in st.session_state:
                 st.error("Please generate weighted scores first.")
             else:
-                weights = st.session_state.weights
-                score = sum(norm_values[feat] * weights.get(feat, 0) for feat in features)
-                if "scored_data" not in st.session_state:
-                    st.error("Please generate weighted scores first.")
                 existing_scores = st.session_state.scored_data["Weighted_Score"]
                 rank = (existing_scores > score).sum() + 1
                 st.success(f"Customer Score: {score:.2f} (Estimated Rank: {rank})")
-                
-                
-                contributions = {feat: norm_values[feat] * weights.get(feat, 0) for feat in features}
-                sorted_contrib = sorted(contributions.items(), key=lambda x: x[1], reverse=True)
-                
+                contributions = {feat: feature_z_new[feat] * st.session_state.weights.get(feat, 0) for feat in features}
+                sorted_contrib = sorted(contributions.items(), key=lambda x: abs(x[1]), reverse=True)
                 st.markdown("**Feature Contributions:**")
+                total_abs = sum(abs(val) for val in contributions.values())
                 for feat, contrib in sorted_contrib:
-                    percentage = (contrib / score * 100) if score != 0 else 0
+                    percentage = (abs(contrib) / total_abs * 100) if total_abs != 0 else 0
                     st.write(f"{feat}: {contrib:.2f} ({percentage:.2f}%)")
-                
-                
                 fig, ax = plt.subplots()
                 labels = list(contributions.keys())
-                sizes = list(contributions.values())
+                sizes = [abs(x) for x in contributions.values()]
                 ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
                 ax.axis('equal')
                 st.pyplot(fig)
-                
     else:
         new_user_template_df = pd.DataFrame(columns=features)
         csv_new_user_template = new_user_template_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download New Customer Template", data=csv_new_user_template, file_name="new_customer_template.csv", mime="text/csv")
-
         uploaded_test = st.file_uploader("Upload CSV for New Customers", type="csv", key="test_csv")
         if st.button("Evaluate Test Customers"):
             if uploaded_test is not None:
@@ -471,7 +463,7 @@ if "synth_data_raw" in st.session_state:
                 scores = []
                 ranks = []
                 for i, row in test_df.iterrows():
-                    norm_values = {}
+                    feature_z_new = {}
                     for feat in features:
                         if "feature_constraints" in st.session_state and feat in st.session_state.feature_constraints:
                             constraint_min, constraint_max = st.session_state.feature_constraints[feat]
@@ -483,12 +475,26 @@ if "synth_data_raw" in st.session_state:
                             st.info(f"{feat} value in row {i+1} is below the allowed minimum of {constraint_min}.")
                         elif val > constraint_max:
                             st.info(f"{feat} value in row {i+1} is above the allowed maximum of {constraint_max}.")
-                        if constraint_max == constraint_min:
-                            norm_val = 1
+                        if "baseline_values" in st.session_state and feat in st.session_state.baseline_values:
+                            mean_val, std_val = st.session_state.baseline_values[feat]
                         else:
-                            norm_val = (val - constraint_min) / (constraint_max - constraint_min) * (1000 - 1) + 1
-                        norm_values[feat] = norm_val
-                    score = sum(norm_values[feat] * st.session_state.weights.get(feat, 0) for feat in features)
+                            mean_val = st.session_state.synth_data_raw[feat].mean()
+                            std_val = st.session_state.synth_data_raw[feat].std()
+                        if std_val == 0:
+                            z = 0
+                        else:
+                            z = (val - mean_val) / std_val
+                        if cap_z_option == "Yes":
+                            z_used = np.clip(z, -1, 1)
+                        else:
+                            z_used = z
+                        feature_z_new[feat] = z_used
+                    S1_new = sum(feature_z_new[feat] * st.session_state.weights.get(feat, 0) for feat in features)
+                    if inverse_scoring:
+                        score = 500 - 100 * S1_new
+                    else:
+                        score = 500 + 100 * S1_new
+                    score = np.clip(score, 0, 1000)
                     scores.append(score)
                     existing_scores = st.session_state.scored_data["Weighted_Score"]
                     rank_val = (existing_scores > score).sum() + 1
