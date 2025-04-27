@@ -347,8 +347,21 @@ def load_real_electricity_data():
             st.error(f"Missing columns in electricity data: {', '.join(missing)}")
             return None
         
-        # Ensure state_name is in INDIAN_STATES_UTS list
-        df["state_name"] = df["state_name"].apply(lambda x: x if x in INDIAN_STATES_UTS else INDIAN_STATES_UTS[0])
+        # Print unique state names before processing to help with debugging
+        unique_states = df["state_name"].unique()
+        print(f"Unique state names in data file: {unique_states}")
+        
+        # Instead of replacing unrecognized states, log them as warnings
+        unrecognized_states = [s for s in unique_states if s not in INDIAN_STATES_UTS]
+        if unrecognized_states:
+            print(f"Warning: Unrecognized state names: {unrecognized_states}")
+            # Optionally map specific state names if needed
+            state_name_mapping = {
+                # Add mappings for any misspelled or differently formatted names
+                # Example: "Delhi (NCT)": "Delhi",
+                # "Andaman & Nicobar": "Andaman and Nicobar Islands",
+            }
+            df["state_name"] = df["state_name"].replace(state_name_mapping)
         
         # Calculate baseline statistics by state
         state_stats = {}
@@ -386,7 +399,8 @@ st.markdown("Analyze your resource consumption and sustainability score")
 # Sidebar configuration
 st.sidebar.markdown("## Data Configuration")
 
-# Load real electricity data
+# Load real electricity data - Make sure to load ALL states data first
+# Load real electricity data - Make sure to load ALL states and union territories data
 if 'electricity_data' not in st.session_state:
     electricity_data = load_real_electricity_data()
     if electricity_data is not None:
@@ -394,14 +408,25 @@ if 'electricity_data' not in st.session_state:
 else:
     electricity_data = st.session_state.electricity_data
 
+# Store complete electricity data in session state
+if electricity_data is not None and 'full_electricity_data' not in st.session_state:
+    st.session_state.full_electricity_data = electricity_data
+
 # Show electricity data info if available
 if electricity_data is not None:
     # Display summary of loaded data
-    st.success(f"Loaded electricity data with {len(electricity_data)} records across {electricity_data['state_name'].nunique()} states")
+    states_count = electricity_data['state_name'].nunique()
+    unique_states = sorted(electricity_data['state_name'].unique().tolist())
+    
+    # Count how many are states vs union territories
+    states = [s for s in unique_states if s in INDIAN_STATES_UTS[:28]]  # First 28 are states
+    uts = [s for s in unique_states if s in INDIAN_STATES_UTS[28:]]  # Rest are UTs
+    
+    st.success(f"Loaded electricity data with {len(electricity_data)} records across {len(states)} states and {len(uts)} union territories")
     
     # State and sector filters for the dashboard
     state_options = sorted(electricity_data['state_name'].unique().tolist())
-    selected_state = st.selectbox("Select State", state_options, key="dashboard_state")
+    selected_state = st.selectbox("Select State/UT", state_options, key="dashboard_state")
     
     sector_options = [('Rural', 1), ('Urban', 2)]
     selected_sector_name, selected_sector = sector_options[0]
@@ -410,7 +435,7 @@ if electricity_data is not None:
         selected_sector_name = st.radio("Select Sector", ['Rural', 'Urban'], key="dashboard_sector")
         selected_sector = 1 if selected_sector_name == 'Rural' else 2
     
-    # Filter electricity data based on selections
+    # Filter electricity data based on selections FOR DISPLAY ONLY
     filtered_data = electricity_data[
         (electricity_data['state_name'] == selected_state) & 
         (electricity_data['sector'] == selected_sector)
@@ -425,11 +450,14 @@ if electricity_data is not None:
     
     # Display distribution of electricity usage for selected state/sector
     st.markdown(f"## Electricity Distribution - {selected_state}, {selected_sector_name}")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.histplot(filtered_data["qty_usage_in_1month"], bins=30, kde=True, ax=ax)
-    ax.set_title(f"Electricity Consumption Distribution - {selected_state}, {selected_sector_name}")
-    ax.set_xlabel("Electricity (kWh/month)")
-    st.pyplot(fig)
+    if not filtered_data.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(filtered_data["qty_usage_in_1month"], bins=30, kde=True, ax=ax)
+        ax.set_title(f"Electricity Consumption Distribution - {selected_state}, {selected_sector_name}")
+        ax.set_xlabel("Electricity (kWh/month)")
+        st.pyplot(fig)
+    else:
+        st.warning(f"No data available for {selected_state} ({selected_sector_name})")
 
 # Sidebar: Corporate data
 st.sidebar.markdown("## Corporate Data Configuration")
@@ -483,9 +511,11 @@ if include_private:
     feature_settings["Private_Transport"] = (private_dist, private_params)
 
 if st.sidebar.button("Generate Analysis Data"):
-    if electricity_data is not None:
-        # Generate synthetic data but use real electricity data
-        raw = generate_synthetic_data(n, feature_settings, electricity_data)
+    # Make sure we use the full electricity data for analysis,
+    # not just the filtered data for the current state view
+    if 'full_electricity_data' in st.session_state:
+        # Generate synthetic data using the FULL electricity data
+        raw = generate_synthetic_data(n, feature_settings, st.session_state.full_electricity_data)
         
         # Add corporate data if requested
         if include_corp and company_data is not None:
@@ -502,15 +532,16 @@ if st.sidebar.button("Generate Analysis Data"):
             feat: (p['min'], p['max']) for feat, (_, p) in feature_settings.items()
         }
         
-        # Add constraints for electricity and MPCE from real data
+        # Add constraints for electricity and MPCE from the FULL real data
+        full_data = st.session_state.full_electricity_data
         st.session_state.feature_constraints["Electricity"] = (
-            electricity_data["qty_usage_in_1month"].min(),
-            electricity_data["qty_usage_in_1month"].max()
+            full_data["qty_usage_in_1month"].min(),
+            full_data["qty_usage_in_1month"].max()
         )
         
         st.session_state.feature_constraints["MPCE"] = (
-            electricity_data["mpce"].min(),
-            electricity_data["mpce"].max()
+            full_data["mpce"].min(),
+            full_data["mpce"].max()
         )
         
         # Compute statistics
@@ -576,35 +607,46 @@ if "synth_data_raw" in st.session_state:
     
     # Personal electricity benchmark
     st.markdown("## Your Personal Electricity Analysis")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # User state selection
-        user_state = st.selectbox("Select Your State/UT", 
-                                 options=sorted(INDIAN_STATES_UTS),
-                                 key="personal_state")
-        # Store the state in session state
-        st.session_state.user_state = user_state
-        
-        # User sector selection
-        user_sector_name = st.radio("Select Your Sector", 
-                                   ['Rural', 'Urban'],
-                                   key="personal_sector")
-        user_sector = 1 if user_sector_name == 'Rural' else 2
-    
-    with col2:
-        #User input for electricity consumption
-        user_electricity = st.number_input("Your Monthly Electricity Usage (kWh)", 
-                                           min_value=0.0, 
-                                           value=0.0, 
-                                           step=10.0,
-                                           key="personal_electricity")
-        
-        # Store the value in session state so it's accessible elsewhere
-        st.session_state.user_electricity = user_electricity
+col1, col2 = st.columns(2)
 
-        # Calculate cost using data patterns if we have user input and data
-        if user_electricity > 0 and electricity_data is not None:
+with col1:
+    # User state selection
+    user_state = st.selectbox("Select Your State/UT", 
+                             options=sorted(INDIAN_STATES_UTS),
+                             key="personal_state")
+    # Store the state in session state
+    st.session_state.user_state = user_state
+    
+    # User sector selection
+    user_sector_name = st.radio("Select Your Sector", 
+                               ['Rural', 'Urban'],
+                               key="personal_sector")
+    user_sector = 1 if user_sector_name == 'Rural' else 2
+
+with col2:
+    #User input for electricity consumption
+    st.markdown("Enter your personal electricity consumption and compare it with the dataset")
+    user_electricity = st.number_input("Your Monthly Electricity Usage (kWh)", 
+                                       min_value=0.0, 
+                                       value=0.0, 
+                                       step=10.0,
+                                       key="personal_electricity")
+    
+    # Store the value in session state so it's accessible elsewhere
+    st.session_state.user_electricity = user_electricity
+
+    # Calculate cost using data patterns if we have user input
+    if user_electricity > 0:
+        # Display user electricity consumption
+        st.metric("Your Electricity Consumption", f"{user_electricity:.2f} kWh")
+        
+        # Add cost input regardless of whether we have state data
+        user_cost = st.number_input("Enter your monthly electricity cost (₹)", 
+                                    min_value=0.0, 
+                                    step=100.0)
+        
+        # Now check if we have electricity data for the selected state/sector
+        if electricity_data is not None:
             # Filter data for user's state and sector
             state_sector_data = electricity_data[
                 (electricity_data['state_name'] == user_state) & 
@@ -612,15 +654,6 @@ if "synth_data_raw" in st.session_state:
             ]
             
             if not state_sector_data.empty:
-                # Display user electricity consumption
-                st.metric("Your Electricity Consumption", f"{user_electricity:.2f} kWh")
-                
-                # Calculate average rate from the data (Rs/kWh)
-                df_rates = pd.DataFrame({
-                    'consumption': [user_electricity],  # Use entered electricity value
-                    'cost': st.number_input("Enter your monthly electricity cost (₹)", min_value=0.0, step=100.0)  # Add cost input
-                })
-                
                 # Calculate state average consumption
                 state_avg = state_sector_data['qty_usage_in_1month'].mean()
                 
@@ -633,42 +666,61 @@ if "synth_data_raw" in st.session_state:
                 ax.set_xlabel("Monthly Consumption (kWh)")
                 ax.legend()
                 st.pyplot(fig)
+            else:
+                st.warning(f"No data available for {user_state} ({user_sector_name}). Showing overall statistics instead.")
                 
-                # Calculate and display sustainability scores if we have feature stats
-                if 'feature_stats' in st.session_state and 'Electricity' in st.session_state.feature_stats:
-                    stats = st.session_state.feature_stats['Electricity']
-                    mean_usage = stats['mean']
-                    std_usage = stats['std']
+                # Use overall statistics if available
+                if 'full_electricity_data' in st.session_state:
+                    overall_avg = st.session_state.full_electricity_data['qty_usage_in_1month'].mean()
+                    st.markdown(f"Overall average electricity consumption: **{overall_avg:.2f} kWh**")
                     
-                    # Calculate z-score (negative because inverse scoring - lower consumption is better)
-                    z_score = (mean_usage - user_electricity) / std_usage if std_usage > 0 else 0
-                    z_score = np.clip(z_score, -1, 1)  # Cap between -1 and 1
-                    
-                    # Calculate sustainability score (500 = average, higher is better)
-                    sust_score = 500 * (1 - np.tanh(z_score/2.5))
-                    
-                    # Calculate percentile rank if we have scored data
-                    percentile = 0
-                    if 'scored_data' in st.session_state:
-                        percentile = (st.session_state.scored_data['Sustainability_Score'] < sust_score).mean() * 100
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        comparison = "better than average" if user_electricity < mean_usage else "worse than average"
-                        diff_pct = abs(user_electricity - mean_usage) / mean_usage * 100
-                        st.metric("Comparison to Average", 
-                                  f"{diff_pct:.1f}% {comparison}", 
-                                  f"{mean_usage:.1f} kWh avg overall")
-                    
-                    with col2:
-                        st.metric("Your Sustainability Score", 
-                                  f"{sust_score:.1f}/1000",
-                                  f"Z-score: {z_score:.2f}")
-                    
-                    with col3:
-                        st.metric("Your Percentile", 
-                                  f"{percentile:.1f}%",
-                                  f"Better than {percentile:.1f}% of users")
+                    # Show overall distribution
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    sns.histplot(st.session_state.full_electricity_data['qty_usage_in_1month'], 
+                                bins=15, kde=True, ax=ax)
+                    ax.axvline(user_electricity, color='red', linestyle='--', label='Your Usage')
+                    ax.axvline(overall_avg, color='green', linestyle='--', label='Overall Average')
+                    ax.set_title("Your Electricity Usage Compared to Overall Average")
+                    ax.set_xlabel("Monthly Consumption (kWh)")
+                    ax.legend()
+                    st.pyplot(fig)
+        
+        # Calculate and display sustainability scores if we have feature stats
+        # (this should work regardless of whether we have state-specific data)
+        if 'feature_stats' in st.session_state and 'Electricity' in st.session_state.feature_stats:
+            stats = st.session_state.feature_stats['Electricity']
+            mean_usage = stats['mean']
+            std_usage = stats['std']
+            
+            # Calculate z-score (negative because inverse scoring - lower consumption is better)
+            z_score = (mean_usage - user_electricity) / std_usage if std_usage > 0 else 0
+            z_score = np.clip(z_score, -1, 1)  # Cap between -1 and 1
+            
+            # Calculate sustainability score (500 = average, higher is better)
+            sust_score = 500 * (1 - np.tanh(z_score/2.5))
+            
+            # Calculate percentile rank if we have scored data
+            percentile = 0
+            if 'scored_data' in st.session_state:
+                percentile = (st.session_state.scored_data['Sustainability_Score'] < sust_score).mean() * 100
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                comparison = "better than average" if user_electricity < mean_usage else "worse than average"
+                diff_pct = abs(user_electricity - mean_usage) / mean_usage * 100
+                st.metric("Comparison to Average", 
+                          f"{diff_pct:.1f}% {comparison}", 
+                          f"{mean_usage:.1f} kWh avg overall")
+            
+            with col2:
+                st.metric("Your Sustainability Score", 
+                          f"{sust_score:.1f}/1000",
+                          f"Z-score: {z_score:.2f}")
+            
+            with col3:
+                st.metric("Your Percentile", 
+                          f"{percentile:.1f}%",
+                          f"Better than {percentile:.1f}% of users")
                 
                 # Add state comparison visualization
                 if 'feature_stats_by_state' in st.session_state:
