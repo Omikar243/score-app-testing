@@ -2240,7 +2240,7 @@ if st.button("Evaluate Customer"):
         
     
     
-        st.title("Data Downloads and Group Upload Interface")
+st.title("Data Downloads and Group Upload Interface")
 
 # -- Download Buttons for Existing Tables --
 if "synth_data_raw" in st.session_state:
