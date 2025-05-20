@@ -919,7 +919,7 @@ else:
 if "scored_data" in st.session_state:
     st.markdown("### Ranked Individuals Based on Sustainability Score")
     scored = st.session_state.scored_data
-    core = ["ID", "Weighted_Score", "Z_Score", "Sustainability_Score", "Rank"]
+    core = ["ID", "Rank", "Weighted_Score", "Z_Score", "Sustainability_Score"]
     
     # Exclude electricity, state, and MPCE from the display columns
     exclude_cols = [
