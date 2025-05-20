@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import plotly.express as px
+import plotly.graph_objects as go
 import json
 from io import BytesIO
 from fpdf import FPDF
@@ -697,41 +698,40 @@ st.markdown("## Total Electricity Usage by Sectors and States Across India")
 # Tab layout for sector and state views
 sector_state_tab1, sector_state_tab2 = st.tabs(["By Sector", "By State"])
 
-with sector_state_tab1:
-    # Calculate the sum of electricity usage by sector
-    sector_total = electricity_data.groupby('sector')['qty_usage_in_1month'].sum().reset_index()
-    # Map sector codes to names
-    sector_total['sector_name'] = sector_total['sector'].map({1: 'Rural', 2: 'Urban'})
+# Calculate the sum of electricity usage by sector
+sector_total = electricity_data.groupby('sector')['qty_usage_in_1month'].sum().reset_index()
+# Map sector codes to names
+sector_total['sector_name'] = sector_total['sector'].map({1: 'Rural', 2: 'Urban'})
 
-    # Create the pie chart for sector distribution
-    fig_pie = px.pie(
-        sector_total, 
-        values='qty_usage_in_1month', 
-        names='sector_name',
-        title="Total Electricity Usage Distribution by Sector",
-        hole=0.4,
-        color_discrete_sequence=px.colors.qualitative.Set2
-    )
+# Create the pie chart for sector distribution
+fig_pie = px.pie(
+    sector_total, 
+    values='qty_usage_in_1month', 
+    names='sector_name',
+    title="Total Electricity Usage Distribution by Sector",
+    hole=0.4,
+    color_discrete_sequence=px.colors.qualitative.Set2
+)
 
-    # Add percentage and absolute values in labels
-    fig_pie.update_traces(
-        textinfo='percent+value', 
-        textposition='inside',
-        hovertemplate='<b>%{label}</b><br>Total Electricity: %{value:.1f} kWh<br>Percentage: %{percent}'
-    )
+# Update to show only percentage in labels (removed value)
+fig_pie.update_traces(
+    textinfo='percent', 
+    textposition='inside',
+    hovertemplate='<b>%{label}</b><br>Total Electricity: %{value:.1f} kWh<br>Percentage: %{percent}'
+)
 
-    # Show the total sum in the center of the donut
-    total_usage = sector_total['qty_usage_in_1month'].sum()
-    fig_pie.update_layout(
-        annotations=[dict(
-            text=f'Total<br>{total_usage:.1f} kWh',
-            x=0.5, y=0.5,
-            font_size=14,
-            showarrow=False
-        )]
-    )
+# Show the total sum in the center of the donut
+total_usage = sector_total['qty_usage_in_1month'].sum()
+fig_pie.update_layout(
+    annotations=[dict(
+        text=f'Total<br>{total_usage:.1f} kWh',
+        x=0.5, y=0.5,
+        font_size=14,
+        showarrow=False
+    )]
+)
 
-    st.plotly_chart(fig_pie)
+st.plotly_chart(fig_pie)
 
 with sector_state_tab2:
     # Calculate the sum of electricity usage by state
@@ -860,7 +860,7 @@ weights = {
     "Water": float(w_water),
     "Public_Transport": float(w_public),
     "Private_Transport": float(w_private),
-    "Environment_Score": float(w_company)         
+    "Company": float(w_company)         
 }
 
 total = sum(weights.values())
@@ -872,9 +872,6 @@ if abs(total - 1.0) > 1e-3:
     st.error("Total weights must sum exactly to 1!")
 else:
     if st.button("Generate Weighted Score"):
-        if 'user_electricity' not in st.session_state:
-            st.session_state.user_electricity = 0
-
         company_data = load_company_data()
         
         if 'synth_data_raw' in st.session_state and company_data is not None:
@@ -890,44 +887,57 @@ else:
                 merged_data = None
         
         if merged_data is not None:
+            # Modified to only use water, public and private transport weights
+            # Create a new dictionary with only the weights we want to use
+            filtered_weights = {
+                "Public_Transport": w_public,
+                "Private_Transport": w_private,
+                "Water": w_water
+            }
+            
+            # Pass only the filtered weights to the compute_weighted_score function
             scored, _ = compute_weighted_score(
-                merged_data, weights, inverse=True, state_specific=use_state_specific
+                merged_data, filtered_weights, inverse=True, state_specific=False
             )
+            
             st.session_state.scored_data = scored
-            st.session_state.weights = weights
+            st.session_state.weights = filtered_weights
             
             st.session_state.sub_weights = {
-                "electricity": {
-                    "state": w_elec_state,
-                    "sector": w_elec_sector,
-                    "mpce": w_elec_mpce
-                },
                 "commute": {
                     "public": w_public,
                     "private": w_private
                 },
                 "water": {
                     "water": w_water
-                },
-                "company": {
-                    "env_score": w_company
                 }
             }
-            st.success("Weighted score and ranking generated!")
+            st.success("Weighted score and ranking generated using only water and transport data!")
         else:
             st.error("No data available for scoring. Please generate analysis data first.")
 
 if "scored_data" in st.session_state:
     st.markdown("### Ranked Individuals Based on Sustainability Score")
     scored = st.session_state.scored_data
-    core = ["ID", "Weighted_Score", "Z_Score", "Sustainability_Score", "Rank", "Environment_Score"]
+    core = ["ID", "Weighted_Score", "Z_Score", "Sustainability_Score", "Rank"]
+    
+    # Exclude electricity, state, and MPCE from the display columns
+    exclude_cols = [
+        "Electricity", "State_UT", "MPCE", 
+        "Electricity_normalized", "Electricity_z_score",
+        "State_Electricity_Factor", "Sector_Electricity_Factor", "MPCE_Electricity_Factor"
+    ]
+    
     extras = [
         col for col in (scored.columns if scored is not None else [])
         if col not in core
+        and col not in exclude_cols
+        and col != "Environment_Score"  
         and not col.endswith("_normalized")  
         and not col.endswith("_z_score")
         and col not in ["Sector_classification", "ESG_Rating", "Total_Employees"]
     ]
+    
     display_cols = list(dict.fromkeys(core + extras))
 
     if scored is not None:
@@ -935,21 +945,15 @@ if "scored_data" in st.session_state:
     else:
         st.warning("No scored data available to display.")
 
-
-
 if "synth_data_raw" in st.session_state:
     if st.button("Show Distribution Graphs"):
-        for col in st.session_state.synth_data_raw.columns:
-            if col not in ["ID", "MPCE", "Company_Name", "Sector classification",
-                           "Environment Score", "ESG Rating", "Category",
-                           "Date of Rating", "Total Employees", "State_UT"]:
+        # Only show relevant columns (water, public transport, private transport)
+        relevant_cols = ["Water", "Public_Transport", "Private_Transport"]
+        for col in relevant_cols:
+            if col in st.session_state.synth_data_raw.columns:
                 fig, ax = plt.subplots()
                 sns.histplot(st.session_state.synth_data_raw[col], bins=30, kde=True, ax=ax)
                 ax.set_title(f"Distribution of {col}")
-                if col == 'Electricity':
-                    ue = st.session_state.user_electricity
-                    ax.axvline(ue, color='red', linestyle='--', label='Your Usage')
-                    ax.legend()
                 st.pyplot(fig)
         
         if "scored_data" in st.session_state:
@@ -979,6 +983,7 @@ if "synth_data_raw" in st.session_state:
             st.pyplot(fig)
         
         if company_data is not None:
+            # The company data visualizations remain unchanged
             st.subheader("Company Environmental Performance Comparison")
             
             company_scores = company_data.sort_values("Environment_Score", ascending=False)
@@ -1098,15 +1103,10 @@ if "synth_data_raw" in st.session_state:
             ]
             
             features = synth_features
-            if "Environment_Score" in st.session_state.scored_data.columns:
-                features = synth_features + ["Environment_Score"]
             feature_to_plot = st.selectbox("Select Feature", features)
             fig, ax = plt.subplots()
             
-            if feature_to_plot == "Environment_Score" and "Environment_Score" in st.session_state.scored_data.columns:
-                x_data = st.session_state.scored_data[feature_to_plot]
-            else:
-                x_data = st.session_state.synth_data_raw[feature_to_plot]
+            x_data = st.session_state.synth_data_raw[feature_to_plot]
                 
             ax.scatter(x_data, st.session_state.scored_data["Sustainability_Score"])
             ax.set_xlabel(feature_to_plot)
@@ -1116,25 +1116,6 @@ if "synth_data_raw" in st.session_state:
         
         
             
-        
-        if "Sector_classification" in st.session_state.scored_data.columns and "Environment_Score" in st.session_state.scored_data.columns:
-            st.markdown("---\n### Environmental Performance by Sector")
-            
-            sector_analysis = st.session_state.scored_data.groupby("Sector_classification").agg({
-                "Environment_Score": ["mean", "min", "max", "count"]
-            }).reset_index()
-            sector_analysis.columns = ["Sector", "Mean Score", "Min Score", "Max Score", "Company Count"]
-            sector_analysis = sector_analysis.sort_values(by="Mean Score", ascending=False)
-            
-            fig, ax = plt.subplots(figsize=(12, 8))
-            sns.barplot(x="Mean Score", y="Sector", data=sector_analysis, ax=ax)
-            ax.set_title("Average Environmental Score by Sector")
-            ax.set_xlabel("Mean Environmental Score")
-            ax.set_ylabel("Sector")
-            st.pyplot(fig)
-            
-            with st.expander("View Detailed Sector Analysis"):
-                st.dataframe(sector_analysis, use_container_width=True)
         
         if "Electricity" in st.session_state.synth_data_raw.columns and "MPCE" in st.session_state.synth_data_raw.columns:
             st.markdown("---\n### Electricity-MPCE Analysis")
@@ -1157,7 +1138,6 @@ if "synth_data_raw" in st.session_state:
                 "Ratio": ratio,
                 "Quartile": ratio_quartiles,
                 "Sustainability_Score": st.session_state.scored_data["Sustainability_Score"],
-                "Environment_Score": st.session_state.scored_data["Environment_Score"],
                 "Water": st.session_state.synth_data_raw["Water"],
                 "Public_Transport": st.session_state.synth_data_raw["Public_Transport"],
                 "Private_Transport": st.session_state.synth_data_raw["Private_Transport"]
@@ -1167,13 +1147,12 @@ if "synth_data_raw" in st.session_state:
                 "Electricity": "mean",
                 "Ratio": "mean",
                 "Sustainability_Score": "mean",
-                "Environment_Score": "mean",
                 "Water": "mean",
                 "Public_Transport": "mean",
                 "Private_Transport": "mean"
             }))
 
-    st.markdown("---\n# Test New Customer")
+st.markdown("---\n# Test New Customer")
 test_mode = st.radio("Input Mode", ["Manual Entry", "CSV Upload"], key="test_mode")
 
 if "synth_data_raw" not in st.session_state:
@@ -1187,8 +1166,112 @@ else:
                     "Environment_Score", "ESG_Rating",
                     "Category", "Total_Employees"]
     ]
+if test_mode == "CSV Upload":
+        st.markdown("### Upload Test Data")   
+        # Download template based on features from scored data
+        if "synth_data_raw" in st.session_state:
+            required_cols = ["Electricity", "MPCE","Water", "Public_Transport", "Private_Transport", "Company_Name", "Sector_classification", "Environment_Score", "ESG_Rating", "Total_Employees"]
 
-if test_mode == "Manual Entry":
+            additional_cols = [c for c in st.session_state.synth_data_raw.columns 
+                             if c not in ["ID", "Weighted_Score", "Z_Score", "Sustainability_Score", "Rank",
+                                        "Company_Name", "Sector_classification", "Environment_Score", 
+                                        "ESG_Rating", "Total_Employees"]]
+            
+            template_cols = list(dict.fromkeys(required_cols + additional_cols))
+            tmpl = pd.DataFrame(columns=template_cols).to_csv(index=False).encode('utf-8')
+            st.download_button("Download Test CSV Template",
+                             data=tmpl, file_name="test_template.csv", mime="text/csv")
+            
+            up_test = st.file_uploader("Upload Test Data", type="csv", key="test_uploader")
+            if up_test:
+                test_df = pd.read_csv(up_test)
+                st.dataframe(test_df)
+                
+                if st.button("Process Test Batch"):
+                    if 'feature_stats' not in st.session_state or 'weights' not in st.session_state:
+                        st.error("Please generate scores first.")
+                    else:
+                        test_with_scores = []
+                        for _, row in test_df.iterrows():
+                            new_customer = {f: row[f] for f in features if f in row}
+                            
+                            z_vals = {}
+                            for feat, val in new_customer.items():
+                                if feat in st.session_state.feature_stats:
+                                    stats = st.session_state.feature_stats[feat]
+                                    z = (stats['mean'] - val)/stats['std']  # Using inverse scoring
+                                    z = np.clip(z, -1, 1)
+                                    z_vals[feat] = z
+                            
+                            z_score = sum(z_vals[f] * st.session_state.weights.get(f, 0) for f in features if f in z_vals)
+                            
+                            sust_score = 500 * (1 - np.tanh(z_score/2.5))
+                            
+                            norm_vals = {}
+                            for feat, val in new_customer.items():
+                                if feat in st.session_state.feature_constraints:
+                                    cmin, cmax = st.session_state.feature_constraints[feat]
+                                    if cmax > cmin:
+                                        norm_vals[feat] = ((cmax - val)/(cmax - cmin))*999 + 1
+                                    else:
+                                        norm_vals[feat] = 500
+                            
+                            weighted_score = sum(norm_vals[f] * st.session_state.weights.get(f, 0) for f in features if f in norm_vals)
+                            
+                            sust_rank = (st.session_state.scored_data["Sustainability_Score"] > sust_score).sum() + 1
+                            trad_rank = (st.session_state.scored_data["Weighted_Score"] > weighted_score).sum() + 1
+                            
+                            result = row.to_dict()
+                            result.update({
+                                "Z_Score": z_score,
+                                "Sustainability_Score": sust_score,
+                                "Sustainability_Rank": sust_rank,
+                                "Weighted_Score": weighted_score,
+                                "Legacy_Rank": trad_rank
+                            })
+                            test_with_scores.append(result)
+                        
+                        results_df = pd.DataFrame(test_with_scores)
+                        st.markdown("### Test Results")
+                        st.dataframe(results_df)
+                        
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        sns.histplot(data=results_df, x="Sustainability_Score", bins=20, kde=True)
+                        ax.axvline(results_df["Sustainability_Score"].mean(), color='red', linestyle='--', label='Mean')
+                        ax.set_title("Distribution of Test Sustainability Scores")
+                        ax.legend()
+                        st.pyplot(fig)
+                        
+                        st.markdown("### Feature Importance Analysis")
+                        
+                        feature_importance = {}
+                        for feat in features:
+                            if feat in results_df.columns:
+                                z_scores = []
+                                for val in results_df[feat]:
+                                    if feat in st.session_state.feature_stats:
+                                        stats = st.session_state.feature_stats[feat]
+                                        z = (stats['mean'] - val)/stats['std']
+                                        z = np.clip(z, -1, 1)
+                                        z_scores.append(abs(z))
+                                if z_scores:
+                                    feature_importance[feat] = np.mean(z_scores) * st.session_state.weights.get(feat, 0)
+                        
+                        if feature_importance:
+                            fig, ax = plt.subplots(figsize=(10, 10))
+                            total = sum(feature_importance.values())
+                            sizes = [v/total for v in feature_importance.values()]
+                            plt.pie(sizes, labels=feature_importance.keys(), autopct='%1.1f%%')
+                            plt.title('Average Feature Contribution')
+                            st.pyplot(fig)
+                            
+                            importance_df = pd.DataFrame([
+                                {"Feature": k, "Importance": v, "Percentage": f"{(v/total)*100:.2f}%"}
+                                for k, v in feature_importance.items()
+                            ]).sort_values("Importance", ascending=False)
+                            st.dataframe(importance_df)
+
+else:
     st.markdown("### Enter Customer Details")
 # CRISIL ESG - Environmental Scoring Only
     # Get sectors from company data if available
@@ -1887,441 +1970,831 @@ if test_mode == "Manual Entry":
             
         
         
-        st.markdown("### Transportation (in Kms)")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Public Transport")
-            public_distance = st.number_input("Distance (km)", min_value=0.0)
-            public_transport_type = st.selectbox("Type", ["Bus", "Train", "Metro", "Other"])
-            
-            public_min, public_max = 0.0, 500.0
-            if 'feature_constraints' in st.session_state and 'Public_Transport' in st.session_state.feature_constraints:
-                public_min, public_max = st.session_state.feature_constraints['Public_Transport']
-        
-        with col2:
-            st.subheader("Private Transport")
-            private_distance = st.number_input("Distance (km)", min_value=0.0, key="private_distance")
-            private_transport_type = st.selectbox("Type", ["Car", "Motorcycle", "Auto", "Other"])
-            private_transport_fuel = st.selectbox("Vehicle Fuel Type", ["Petrol", "Diesel", "CNG", "Electric"])
-            
-            private_min, private_max = 0.0, 300.0
-            if 'feature_constraints' in st.session_state and 'Private_Transport' in st.session_state.feature_constraints:
-                private_min, private_max = st.session_state.feature_constraints['Private_Transport']
-        
-        new_customer = {
-            "Water": water_units,
-            
-            "Public_Transport": public_distance,
-            "Public_Transport_Type": public_transport_type,
-            "Private_Transport": private_distance,
-            "Private_Transport_Type": private_transport_type,
-            "Private_Transport_fuel": private_transport_fuel
-    }
-    
-    
-else:
-        # Download template based on features from scored data
-        if "synth_data_raw" in st.session_state:
-            required_cols = ["Electricity", "MPCE","Water", "Public_Transport", "Private_Transport", "Company_Name", "Sector_classification", "Environment_Score", "ESG_Rating", "Total_Employees"]
+    st.title("Transport Carbon Footprint Calculator")
+st.markdown("""
+This helps you calculate your monthly carbon footprint based on your daily commute and transportation choices.
+Compare different transportation modes and receive personalized sustainability recommendations.
+""")
 
-            additional_cols = [c for c in st.session_state.synth_data_raw.columns 
-                             if c not in ["ID", "Weighted_Score", "Z_Score", "Sustainability_Score", "Rank",
-                                        "Company_Name", "Sector_classification", "Environment_Score", 
-                                        "ESG_Rating", "Total_Employees"]]
+# Initialize session state variables if they don't exist
+if 'calculated' not in st.session_state:
+    st.session_state.calculated = False
+if 'total_emissions' not in st.session_state:
+    st.session_state.total_emissions = 0
+if 'recommendations' not in st.session_state:
+    st.session_state.recommendations = []
+if 'emissions_data' not in st.session_state:
+    st.session_state.emissions_data = {}
+
+# Define emission factors (approximate values)
+emission_factors = {
+    # Two wheelers
+    "two_wheeler": {
+        "Scooter": {
+            "petrol": {"min": 0.03, "max": 0.06},
+            "diesel": {"min": 0.04, "max": 0.07},
+            "electric": {"min": 0.01, "max": 0.02}
+        },
+        "Motorcycle": {
+            "petrol": {"min": 0.05, "max": 0.09},
+            "diesel": {"min": 0.06, "max": 0.10},
+            "electric": {"min": 0.01, "max": 0.02}
+        }
+    },
+    
+    # Three wheelers
+    "three_wheeler": {
+        "petrol": {"min": 0.07, "max": 0.12},
+        "diesel": {"min": 0.08, "max": 0.13},
+        "electric": {"min": 0.02, "max": 0.03},
+        "cng": {"min": 0.05, "max": 0.09}
+    },
+    
+    # Four wheelers
+    "four_wheeler": {
+        "small": {
+            "petrol": {"base": 0.12, "uplift": 1.1},
+            "diesel": {"base": 0.14, "uplift": 1.1},
+            "cng": {"base": 0.10, "uplift": 1.05},
+            "electric": {"base": 0.05, "uplift": 1.0}
+        },
+        "hatchback": {
+            "petrol": {"base": 0.15, "uplift": 1.1},
+            "diesel": {"base": 0.17, "uplift": 1.1},
+            "cng": {"base": 0.12, "uplift": 1.05},
+            "electric": {"base": 0.06, "uplift": 1.0}
+        },
+        "premium_hatchback": {
+            "petrol": {"base": 0.18, "uplift": 1.15},
+            "diesel": {"base": 0.20, "uplift": 1.15},
+            "cng": {"base": 0.14, "uplift": 1.10},
+            "electric": {"base": 0.07, "uplift": 1.0}
+        },
+        "compact_suv": {
+            "petrol": {"base": 0.21, "uplift": 1.2},
+            "diesel": {"base": 0.23, "uplift": 1.2},
+            "cng": {"base": 0.16, "uplift": 1.15},
+            "electric": {"base": 0.08, "uplift": 1.0}
+        },
+        "sedan": {
+            "petrol": {"base": 0.20, "uplift": 1.2},
+            "diesel": {"base": 0.22, "uplift": 1.2},
+            "cng": {"base": 0.16, "uplift": 1.15},
+            "electric": {"base": 0.08, "uplift": 1.0}
+        },
+        "suv": {
+            "petrol": {"base": 0.25, "uplift": 1.25},
+            "diesel": {"base": 0.28, "uplift": 1.25},
+            "cng": {"base": 0.20, "uplift": 1.2},
+            "electric": {"base": 0.10, "uplift": 1.0}
+        },
+        "hybrid": {
+            "petrol": {"base": 0.14, "uplift": 1.05},
+            "diesel": {"base": 0.16, "uplift": 1.05},
+            "electric": {"base": 0.07, "uplift": 1.0}
+        }
+    },
+    
+    # Public transport
+    "public_transport": {
+        "taxi": {
+            "small": {
+                "petrol": {"base": 0.12, "uplift": 1.1},
+                "diesel": {"base": 0.14, "uplift": 1.1},
+                "cng": {"base": 0.10, "uplift": 1.05},
+                "electric": {"base": 0.05, "uplift": 1.0}
+            },
+            "hatchback": {
+                "petrol": {"base": 0.15, "uplift": 1.1},
+                "diesel": {"base": 0.17, "uplift": 1.1},
+                "cng": {"base": 0.12, "uplift": 1.05},
+                "electric": {"base": 0.06, "uplift": 1.0}
+            },
+            "sedan": {
+                "petrol": {"base": 0.20, "uplift": 1.2},
+                "diesel": {"base": 0.22, "uplift": 1.2},
+                "cng": {"base": 0.16, "uplift": 1.15},
+                "electric": {"base": 0.08, "uplift": 1.0}
+            },
+            "suv": {
+                "petrol": {"base": 0.25, "uplift": 1.25},
+                "diesel": {"base": 0.28, "uplift": 1.25},
+                "cng": {"base": 0.20, "uplift": 1.2},
+                "electric": {"base": 0.10, "uplift": 1.0}
+            }
+        },
+        "bus": {
+            "electric": 0.025,
+            "petrol": 0.05,
+            "diesel": 0.045,
+            "cng": 0.035
+        },
+        "metro": 0.015
+    }
+}
+
+# Create input form in the main area
+st.header("Your Commute Details")
+
+# Universal commute details
+col1, col2, col3 = st.columns(3)
+with col1:
+    distance = st.number_input("Daily one-way distance (km)", min_value=0.1, value=10.0, step=0.5)
+with col2:
+    days_per_week = st.number_input("Commuting days per week", min_value=1, max_value=7, value=5, step=1)
+with col3:
+    weeks_per_month = st.number_input("Commuting weeks per month", min_value=1, max_value=5, value=4, step=1)
+
+# Calculate total monthly distance
+total_monthly_km = distance * 2 * days_per_week * weeks_per_month
+st.metric("Total monthly commute distance", f"{total_monthly_km:.1f} km")
+
+# Transport category selection
+st.header("Select Your Transport Category")
+transport_category = st.selectbox(
+    "Transport Category",
+    ["Private Transport", "Public Transport", "Both Private and Public"]
+)
+
+# Define variable to store emission factors
+emission_factor = 0
+people_count = 1
+vehicle_type = ""
+vehicle_name = ""
+
+# Dynamic form based on transport category
+if transport_category == "Private Transport" or transport_category == "Both Private and Public":
+    st.subheader("Private Transport Details")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        private_vehicle_type = st.selectbox(
+            "Vehicle Type",
+            ["Two Wheeler", "Three Wheeler", "Four Wheeler"],
+            key="private_vehicle"
+        )
+
+    # Dynamic form based on private vehicle type
+    if private_vehicle_type == "Two Wheeler":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            category = st.selectbox("Category", ["Scooter", "Motorcycle"])
+        with col2:
+            engine_cc = st.number_input("Engine (cc)", 50, 1500, 150)
+        with col3:
+            fuel_type = st.selectbox("Fuel Type", ["petrol", "diesel", "electric"])
+        
+        # Calculate emission factor based on engine size
+        if engine_cc <= 150:
+            emission_factor = emission_factors["two_wheeler"][category][fuel_type]["min"]
+        else:
+            # Linear interpolation based on engine size
+            min_ef = emission_factors["two_wheeler"][category][fuel_type]["min"]
+            max_ef = emission_factors["two_wheeler"][category][fuel_type]["max"]
+            ratio = min(1.0, (engine_cc - 150) / 1350)  # Normalize to 0-1
+            emission_factor = min_ef + ratio * (max_ef - min_ef)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            rideshare = st.checkbox("Rideshare")
+        with col2:
+            if rideshare:
+                people_count = st.slider("Number of people sharing", 1, 2, 1)
+            else:
+                people_count = 1
+        
+        vehicle_type = "Two Wheeler"
+        vehicle_name = f"{category} ({fuel_type}, {engine_cc}cc)"
+        if rideshare:
+            vehicle_name += f" with {people_count} people"
+
+    elif private_vehicle_type == "Three Wheeler":
+        col1, col2 = st.columns(2)
+        with col1:
+            engine_cc = st.slider("Engine (cc)", 50, 1000, 200)
+        with col2:
+            fuel_type = st.selectbox("Fuel Type", ["petrol", "diesel", "electric", "cng"])
+        
+        # Calculate emission factor based on engine size
+        min_ef = emission_factors["three_wheeler"][fuel_type]["min"]
+        max_ef = emission_factors["three_wheeler"][fuel_type]["max"]
+        ratio = min(1.0, (engine_cc - 50) / 950)  # Normalize to 0-1
+        emission_factor = min_ef + ratio * (max_ef - min_ef)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            rideshare = st.checkbox("Rideshare")
+        with col2:
+            if rideshare:
+                people_count = st.slider("Number of people sharing", 1, 3, 1)
+            else:
+                people_count = 1
+        
+        vehicle_type = "Three Wheeler"
+        vehicle_name = f"Three Wheeler ({fuel_type}, {engine_cc}cc)"
+        if rideshare:
+            vehicle_name += f" with {people_count} people"
+
+    elif private_vehicle_type == "Four Wheeler":
+        col1, col2 = st.columns(2)
+        with col1:
+            car_type = st.selectbox(
+                "Car Type", 
+                ["small", "hatchback", "premium_hatchback", "compact_suv", "sedan", "suv", "hybrid"]
+            )
+        with col2:
+            engine_cc = st.slider("Engine (cc)", 600, 4000, 1200)
+        
+        fuel_options = ["petrol", "diesel", "cng", "electric"]
+        if car_type == "hybrid":
+            fuel_options = ["petrol", "diesel", "electric"]
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            fuel_type = st.selectbox("Fuel Type", fuel_options)
+        
+        # Calculate emission factor with uplift
+        base_ef = emission_factors["four_wheeler"][car_type][fuel_type]["base"]
+        uplift = emission_factors["four_wheeler"][car_type][fuel_type]["uplift"]
+        
+        # Adjust for engine size (larger engines emit more)
+        if fuel_type != "electric":
+            engine_factor = 1.0 + min(1.0, (engine_cc - 600) / 3400) * 0.5  # Up to 50% more for largest engines
+        else:
+            engine_factor = 1.0  # Electric doesn't scale with engine size in the same way
             
-            template_cols = list(dict.fromkeys(required_cols + additional_cols))
-            tmpl = pd.DataFrame(columns=template_cols).to_csv(index=False).encode('utf-8')
-            st.download_button("Download Test CSV Template",
-                             data=tmpl, file_name="test_template.csv", mime="text/csv")
-            
-            up_test = st.file_uploader("Upload Test Data", type="csv", key="test_uploader")
-            if up_test:
-                test_df = pd.read_csv(up_test)
-                st.dataframe(test_df)
-                
-                if st.button("Process Test Batch"):
-                    if 'feature_stats' not in st.session_state or 'weights' not in st.session_state:
-                        st.error("Please generate scores first.")
-                    else:
-                        test_with_scores = []
-                        for _, row in test_df.iterrows():
-                            new_customer = {f: row[f] for f in features if f in row}
-                            
-                            z_vals = {}
-                            for feat, val in new_customer.items():
-                                if feat in st.session_state.feature_stats:
-                                    stats = st.session_state.feature_stats[feat]
-                                    z = (stats['mean'] - val)/stats['std']  # Using inverse scoring
-                                    z = np.clip(z, -1, 1)
-                                    z_vals[feat] = z
-                            
-                            z_score = sum(z_vals[f] * st.session_state.weights.get(f, 0) for f in features if f in z_vals)
-                            
-                            sust_score = 500 * (1 - np.tanh(z_score/2.5))
-                            
-                            norm_vals = {}
-                            for feat, val in new_customer.items():
-                                if feat in st.session_state.feature_constraints:
-                                    cmin, cmax = st.session_state.feature_constraints[feat]
-                                    if cmax > cmin:
-                                        norm_vals[feat] = ((cmax - val)/(cmax - cmin))*999 + 1
-                                    else:
-                                        norm_vals[feat] = 500
-                            
-                            weighted_score = sum(norm_vals[f] * st.session_state.weights.get(f, 0) for f in features if f in norm_vals)
-                            
-                            sust_rank = (st.session_state.scored_data["Sustainability_Score"] > sust_score).sum() + 1
-                            trad_rank = (st.session_state.scored_data["Weighted_Score"] > weighted_score).sum() + 1
-                            
-                            result = row.to_dict()
-                            result.update({
-                                "Z_Score": z_score,
-                                "Sustainability_Score": sust_score,
-                                "Sustainability_Rank": sust_rank,
-                                "Weighted_Score": weighted_score,
-                                "Legacy_Rank": trad_rank
-                            })
-                            test_with_scores.append(result)
-                        
-                        results_df = pd.DataFrame(test_with_scores)
-                        st.markdown("### Test Results")
-                        st.dataframe(results_df)
-                        
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        sns.histplot(data=results_df, x="Sustainability_Score", bins=20, kde=True)
-                        ax.axvline(results_df["Sustainability_Score"].mean(), color='red', linestyle='--', label='Mean')
-                        ax.set_title("Distribution of Test Sustainability Scores")
-                        ax.legend()
-                        st.pyplot(fig)
-                        
-                        st.markdown("### Feature Importance Analysis")
-                        
-                        feature_importance = {}
-                        for feat in features:
-                            if feat in results_df.columns:
-                                z_scores = []
-                                for val in results_df[feat]:
-                                    if feat in st.session_state.feature_stats:
-                                        stats = st.session_state.feature_stats[feat]
-                                        z = (stats['mean'] - val)/stats['std']
-                                        z = np.clip(z, -1, 1)
-                                        z_scores.append(abs(z))
-                                if z_scores:
-                                    feature_importance[feat] = np.mean(z_scores) * st.session_state.weights.get(feat, 0)
-                        
-                        if feature_importance:
-                            fig, ax = plt.subplots(figsize=(10, 10))
-                            total = sum(feature_importance.values())
-                            sizes = [v/total for v in feature_importance.values()]
-                            plt.pie(sizes, labels=feature_importance.keys(), autopct='%1.1f%%')
-                            plt.title('Average Feature Contribution')
-                            st.pyplot(fig)
-                            
-                            importance_df = pd.DataFrame([
-                                {"Feature": k, "Importance": v, "Percentage": f"{(v/total)*100:.2f}%"}
-                                for k, v in feature_importance.items()
-                            ]).sort_values("Importance", ascending=False)
-                            st.dataframe(importance_df)
+        emission_factor = base_ef * uplift * engine_factor
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            rideshare = st.checkbox("Rideshare")
+        with col2:
+            if rideshare:
+                people_count = st.slider("Number of people sharing", 1, 5, 1)
+            else:
+                people_count = 1
+        
+        vehicle_type = "Four Wheeler"
+        vehicle_name = f"{car_type.replace('_', ' ').title()} ({fuel_type}, {engine_cc}cc)"
+        if rideshare:
+            vehicle_name += f" with {people_count} people"
+
+if transport_category == "Public Transport" or transport_category == "Both Private and Public":
+    st.subheader("Public Transport Details")
+    col1, col2 = st.columns(2)
+    with col1:
+        transport_mode = st.selectbox("Mode", ["Taxi", "Bus", "Metro"], key="public_mode")
+    
+    if transport_mode == "Taxi":
+        col1, col2 = st.columns(2)
+        with col1:
+            car_type = st.selectbox(
+                "Car Type", 
+                ["small", "hatchback", "sedan", "suv"],
+                key="taxi_type"
+            )
+        with col2:
+            fuel_type = st.selectbox("Fuel Type", ["petrol", "diesel", "cng", "electric"], key="taxi_fuel")
+        
+        base_ef = emission_factors["public_transport"]["taxi"][car_type][fuel_type]["base"]
+        uplift = emission_factors["public_transport"]["taxi"][car_type][fuel_type]["uplift"]
+        public_emission_factor = base_ef * uplift
+        
+        public_people_count = st.slider("Number of people sharing", 1, 4, 1, key="taxi_people")
+        
+        # Only update main variables if only using public transport
+        if transport_category == "Public Transport":
+            emission_factor = public_emission_factor
+            people_count = public_people_count
+            vehicle_type = "Public Transport"
+            vehicle_name = f"Taxi - {car_type.replace('_', ' ').title()} ({fuel_type})"
+            if public_people_count > 1:
+                vehicle_name += f" with {public_people_count} people"
+    
+    elif transport_mode == "Bus":
+        public_fuel_type = st.selectbox("Fuel Type", ["diesel", "cng", "electric", "petrol"], key="bus_fuel")
+        public_emission_factor = emission_factors["public_transport"]["bus"][public_fuel_type]
+        # For buses, we assume a certain average occupancy already factored into emission factor
+        public_people_count = 1
+        
+        # Only update main variables if only using public transport
+        if transport_category == "Public Transport":
+            emission_factor = public_emission_factor
+            people_count = public_people_count
+            vehicle_type = "Public Transport"
+            vehicle_name = f"Bus ({public_fuel_type})"
+    
+    else:  # Metro
+        public_emission_factor = emission_factors["public_transport"]["metro"]
+        public_people_count = 1  # Already factored into emission factor
+        
+        # Only update main variables if only using public transport
+        if transport_category == "Public Transport":
+            emission_factor = public_emission_factor
+            people_count = public_people_count
+            vehicle_type = "Public Transport"
+            vehicle_name = "Metro"
+
+# Handle "Both" case by calculating combined emissions
+if transport_category == "Both Private and Public":
+    # Here we need to ask for usage ratio
+    st.subheader("Usage Distribution")
+    private_trips = st.number_input("Number of trips per day using private transport", min_value=0, max_value=10, value=2, step=1)
+    total_trips = st.number_input("Total number of trips per day", min_value=1, max_value=10, value=4, step=1)
+    private_ratio = private_trips / total_trips if total_trips > 0 else 0
+    public_ratio = 1 - private_ratio
+    
+    # Calculate combined emission factor
+    if private_ratio > 0 and public_ratio > 0:
+        # Create a combined name for private transport
+        if private_vehicle_type == "Two Wheeler":
+            private_part = f"{category} ({fuel_type}, {engine_cc}cc)"
+        elif private_vehicle_type == "Three Wheeler":
+            private_part = f"Three Wheeler ({fuel_type}, {engine_cc}cc)"
+        elif private_vehicle_type == "Four Wheeler":
+            private_part = f"{car_type.replace('_', ' ').title()} ({fuel_type}, {engine_cc}cc)"
+        
+        # Create a combined name for public transport
+        if transport_mode == "Taxi":
+            public_part = f"Taxi - {car_type.replace('_', ' ').title()} ({fuel_type})"
+        elif transport_mode == "Bus":
+            public_part = f"Bus ({public_fuel_type})"
+        else:  # Metro
+            public_part = "Metro"
+        
+        # Calculate combined emission factor with proper division by people count
+        combined_emission_factor = (emission_factor / people_count) * private_ratio + (public_emission_factor / public_people_count) * public_ratio
+        emission_factor = combined_emission_factor
+        people_count = 1  # Already factored in above
+        
+        vehicle_type = "Combined Transport"
+        vehicle_name = f"{private_part} ({private_ratio*100:.0f}%) & {public_part} ({public_ratio*100:.0f}%)"
+    
+    
+
 
 if st.button("Evaluate Customer"):
-       if 'feature_stats' not in st.session_state or 'weights' not in st.session_state:
-            st.error("Please generate scores first.")
-       else:
-            inverse_scoring = True
+    # Create new_customer dictionary with collected values
+    new_customer = {
+        'Water': water_units,
+        'Public_Transport': total_monthly_km if transport_category in ["Public Transport", "Both Private and Public"] else 0,
+        'Private_Transport': total_monthly_km if transport_category in ["Private Transport", "Both Private and Public"] else 0
+    }
+
+    # First, calculate carbon footprint similar to "Calculate Carbon Footprint" button logic
+    if 'total_monthly_km' in locals() and 'emission_factor' in locals():
+        # Calculate total monthly emissions
+        total_emissions = total_monthly_km * emission_factor
+        
+        # Store in session state
+        st.session_state.calculated = True
+        st.session_state.total_emissions = total_emissions
+        
+        # Generate alternative scenarios for comparison
+        alternatives = {}
+        
+        # Add current vehicle
+        alternatives[vehicle_name] = total_emissions
+        
+        # Generate alternatives for comparison
+        # Add public transport options
+        alternatives["Bus (Diesel)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["diesel"])
+        alternatives["Bus (CNG)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["cng"])
+        alternatives["Bus (Electric)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["electric"])
+        alternatives["Metro"] = (total_monthly_km * emission_factors["public_transport"]["metro"])
+        
+        # Add car sharing options if not already selected
+        if not (vehicle_type == "Four Wheeler" and "rideshare" in locals() and rideshare and people_count >= 3):
+            alternatives["Car Pooling (4 people)"] = (total_monthly_km * emission_factors["four_wheeler"]["sedan"]["petrol"]["base"] * 
+                                                    emission_factors["four_wheeler"]["sedan"]["petrol"]["uplift"]) / 4
+        
+        # Add electric vehicle options if not already selected
+        if not (vehicle_type == "Four Wheeler" and "fuel_type" in locals() and fuel_type == "electric"):
+            alternatives["Electric Car"] = (total_monthly_km * emission_factors["four_wheeler"]["sedan"]["electric"]["base"] * 
+                                          emission_factors["four_wheeler"]["sedan"]["electric"]["uplift"])
+        
+        if not (vehicle_type == "Two Wheeler" and "fuel_type" in locals() and fuel_type == "electric"):
+            alternatives["Electric Scooter"] = (total_monthly_km * emission_factors["two_wheeler"]["Scooter"]["electric"]["min"])
+        
+        st.session_state.emissions_data = alternatives
+        
+        # Generate recommendations
+        recommendations = []
+        
+        # Basic recommendation based on emissions
+        if total_emissions > 100:
+            recommendations.append("Your carbon footprint from commuting is quite high. Consider switching to more sustainable transport options.")
+        elif total_emissions > 50:
+            recommendations.append("Your carbon footprint is moderate. There's room for improvement by considering more sustainable options.")
+        else:
+            recommendations.append("Your carbon footprint is relatively low, but you can still make improvements.")
+        
+        # Specific recommendations
+        if vehicle_type == "Four Wheeler" and people_count == 1:
+            recommendations.append("Consider carpooling to reduce emissions. Sharing your ride with 3 other people could reduce your emissions by up to 75%.")
+        
+        if "fuel_type" in locals() and fuel_type in ["petrol", "diesel"] and vehicle_type != "Public Transport":
+            recommendations.append("Consider switching to an electric vehicle to significantly reduce your carbon footprint.")
+        
+        # Compare with public transit options for personal vehicles
+        if vehicle_type in ["Four Wheeler", "Two Wheeler"]:
+            bus_emissions = total_monthly_km * emission_factors["public_transport"]["bus"]["electric"]
+            metro_emissions = total_monthly_km * emission_factors["public_transport"]["metro"]
             
-            z_vals = {}
-            for feat, val in new_customer.items():
-                if feat in features:  
-                    stats = st.session_state.feature_stats.get(feat)
-                    if stats:
-                        z = (stats['mean'] - val)/stats['std'] if inverse_scoring else (val - stats['mean'])/stats['std']
-                        z = np.clip(z, -1, 1)  
-                        z_vals[feat] = z
+            if total_emissions > 2 * bus_emissions:
+                recommendations.append(f"Using an electric bus could reduce your emissions by approximately {(total_emissions - bus_emissions) / total_emissions * 100:.1f}%.")
             
-            if "Environment_Score" in new_customer:
-                if "Environment_Score" in features:
-                    stats = st.session_state.feature_stats.get("Environment_Score")
-                    if stats:
-                        z = (stats['mean'] - new_customer["Environment_Score"])/stats['std'] if inverse_scoring else (new_customer["Environment_Score"] - stats['mean'])/stats['std']
-                        z = np.clip(z, -1, 1)  
+            if total_emissions > 2 * metro_emissions:
+                recommendations.append(f"Using metro could reduce your emissions by approximately {(total_emissions - metro_emissions) / total_emissions * 100:.1f}%.")
+        
+        st.session_state.recommendations = recommendations
+    
+    # Now continue with the existing customer evaluation logic
+    if 'feature_stats' not in st.session_state or 'weights' not in st.session_state:
+        st.error("Please generate scores first.")
+    else:
+        inverse_scoring = True
+        
+        z_vals = {}
+        for feat, val in new_customer.items():
+            if feat in features:  
+                stats = st.session_state.feature_stats.get(feat)
+                if stats:
+                    z = (stats['mean'] - val)/stats['std'] if inverse_scoring else (val - stats['mean'])/stats['std']
+                    z = np.clip(z, -1, 1)  
+                    z_vals[feat] = z
+        
+        if "Environment_Score" in new_customer:
+            if "Environment_Score" in features:
+                stats = st.session_state.feature_stats.get("Environment_Score")
+                if stats:
+                    z = (stats['mean'] - new_customer["Environment_Score"])/stats['std'] if inverse_scoring else (new_customer["Environment_Score"] - stats['mean'])/stats['std']
+                    z = np.clip(z, -1, 1)  
+                    z_vals["Environment_Score"] = z
+            else:
+                if 'company_data' in locals() or 'company_data' in globals():
+                    if "Environment_Score" in company_data.columns:
+                        mean = company_data["Environment_Score"].mean()
+                        std = company_data["Environment_Score"].std()
+                        z = (mean - new_customer["Environment_Score"])/std if inverse_scoring else (new_customer["Environment_Score"] - mean)/std
+                        z = np.clip(z, -1, 1)  # Cap z-value between -1 and 1
                         z_vals["Environment_Score"] = z
+        
+        if "user_electricity" in st.session_state:
+            electricity_value = st.session_state.user_electricity
+            z_vals["Electricity"] = 0
+            
+        weights = st.session_state.weights
+        z_score = sum(z_vals[f] * weights.get(f, 0) for f in features if f in z_vals)
+        
+        if "Environment_Score" in z_vals:
+            z_score += z_vals["Environment_Score"] * weights.get("Environment_Score", 0)
+        
+        sust_score = 500 * (1 - np.tanh(z_score/2.5))
+        
+        norm_vals = {}
+        for feat, val in new_customer.items():
+            if feat in features:  # Only process numeric features for scoring
+                cmin, cmax = st.session_state.feature_constraints.get(feat, (val, val))
+                if cmax == cmin:
+                    norm_vals[feat] = 1
                 else:
-                    if 'company_data' in locals() or 'company_data' in globals():
-                        if "Environment_Score" in company_data.columns:
-                            mean = company_data["Environment_Score"].mean()
-                            std = company_data["Environment_Score"].std()
-                            z = (mean - new_customer["Environment_Score"])/std if inverse_scoring else (new_customer["Environment_Score"] - mean)/std
-                            z = np.clip(z, -1, 1)  # Cap z-value between -1 and 1
-                            z_vals["Environment_Score"] = z
+                    if inverse_scoring:
+                        norm_vals[feat] = ((cmax - val)/(cmax - cmin))*999 + 1
+                    else:
+                        norm_vals[feat] = ((val - cmin)/(cmax - cmin))*999 + 1
+        
+        if "Environment_Score" in new_customer:
+            if "Environment_Score" in features:
+                cmin, cmax = st.session_state.feature_constraints.get("Environment_Score", (new_customer["Environment_Score"], new_customer["Environment_Score"]))
+                if cmax == cmin:
+                    norm_vals["Environment_Score"] = 1
+                else:
+                    if inverse_scoring:
+                        norm_vals["Environment_Score"] = ((cmax - new_customer["Environment_Score"])/(cmax - cmin))*999 + 1
+                    else:
+                        norm_vals["Environment_Score"] = ((new_customer["Environment_Score"] - cmin)/(cmax - cmin))*999 + 1
+        
+        weighted_score = sum(norm_vals[f] * weights.get(f, 0) for f in features if f in norm_vals)
+        
+        if "Environment_Score" in norm_vals:
+            weighted_score += norm_vals["Environment_Score"] * weights.get("Environment_Score", 0)
+        
+        existing_sust = st.session_state.scored_data["Sustainability_Score"]
+        existing_trad = st.session_state.scored_data["Weighted_Score"]
+        sust_rank = (existing_sust > sust_score).sum() + 1
+        trad_rank = (existing_trad > weighted_score).sum() + 1
+        
+        st.markdown("---")
+        st.markdown("### Customer Score Results")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if "user_electricity" in st.session_state:
+                st.metric("Personal Electricity Usage", f"{st.session_state.user_electricity:.2f} kWh")
+            if "Environment_Score" in new_customer:
+                st.metric("Company Environment Score", f"{new_customer['Environment_Score']:.2f}")
+            
+            st.metric("Water Usage", f"{new_customer['Water']:.2f}")
+            st.metric("Public Transport", f"{new_customer['Public_Transport']:.2f}")
+            st.metric("Private Transport", f"{new_customer['Private_Transport']:.2f}")
+            
+            st.metric("Z-Score", f"{z_score:.2f}")
+            st.metric("Sustainability Score", f"{sust_score:.2f}")
+            st.metric("Sustainability Rank", f"{sust_rank}")
+            st.metric("Legacy Weighted Score", f"{weighted_score:.2f}")
+            st.metric("Legacy Rank", f"{trad_rank}")
+
+            better_than = (existing_sust < sust_score).mean() * 100
+            st.success(f"This customer performs better than **{better_than:.1f}%** of customers in the dataset (based on Z-Score)")
+
+            z_description = "above" if z_score > 0 else "below"
+            st.info(f"Performance: **{abs(z_score):.2f} SD {z_description} mean**")
+        
+        with col2:
+            all_features_weights = {
+                feat: abs(weights.get(feat, 0))
+                for feat in z_vals.keys()
+            }
+            all_features_weights.setdefault('Environment_Score', 0)
+            if all_features_weights['Environment_Score'] == 0:
+                all_features_weights['Environment_Score'] = 0.15
             
             if "user_electricity" in st.session_state:
-                electricity_value = st.session_state.user_electricity
-                z_vals["Electricity"] = 0
-                
-            weights = st.session_state.weights
-            z_score = sum(z_vals[f] * weights.get(f, 0) for f in features if f in z_vals)
+                all_features_weights.setdefault('Electricity', 0)
+                if all_features_weights['Electricity'] == 0:
+                    all_features_weights['Electricity'] = 0.15
             
-            if "Environment_Score" in z_vals:
-                z_score += z_vals["Environment_Score"] * weights.get("Environment_Score", 0)
+            all_features_weights = {
+                f: w for f, w in all_features_weights.items()
+                if w > 0
+            }
+            total = sum(all_features_weights.values())
+            contribs = {f: w / total for f, w in all_features_weights.items()}
+            explode = [0.1 if f in ['Environment_Score', 'Electricity'] else 0 for f in contribs]
+            fig, ax = plt.subplots(figsize=(6,6))
+            ax.pie(
+                list(contribs.values()),
+                labels=list(contribs.keys()),
+                autopct='%1.1f%%',
+                startangle=90,
+                explode=explode
+            )
+            ax.set_title('Feature Weightage for Customer')
+            st.pyplot(fig)
             
-            sust_score = 500 * (1 - np.tanh(z_score/2.5))
+            if "Environment_Score" in contribs:
+                st.info(f"Environment Score contributes {contribs['Environment_Score']*100:.1f}%")
+            if "Electricity" in contribs:
+                st.info(f"Electricity Usage contributes {contribs['Electricity']*100:.1f}%")
+        
+        # Display carbon footprint results if calculation has been done
+        if st.session_state.calculated:
+            st.divider()
+            st.header("Carbon Footprint Results")
             
-            norm_vals = {}
-            for feat, val in new_customer.items():
-                if feat in features:  # Only process numeric features for scoring
-                    cmin, cmax = st.session_state.feature_constraints.get(feat, (val, val))
-                    if cmax == cmin:
-                        norm_vals[feat] = 1
-                    else:
-                        if inverse_scoring:
-                            norm_vals[feat] = ((cmax - val)/(cmax - cmin))*999 + 1
-                        else:
-                            norm_vals[feat] = ((val - cmin)/(cmax - cmin))*999 + 1
+            # Create columns for layout
+            col1, col2 = st.columns([1, 1])
             
-            if "Environment_Score" in new_customer:
-                if "Environment_Score" in features:
-                    cmin, cmax = st.session_state.feature_constraints.get("Environment_Score", (new_customer["Environment_Score"], new_customer["Environment_Score"]))
-                    if cmax == cmin:
-                        norm_vals["Environment_Score"] = 1
-                    else:
-                        if inverse_scoring:
-                            norm_vals["Environment_Score"] = ((cmax - new_customer["Environment_Score"])/(cmax - cmin))*999 + 1
-                        else:
-                            norm_vals["Environment_Score"] = ((new_customer["Environment_Score"] - cmin)/(cmax - cmin))*999 + 1
-            
-            weighted_score = sum(norm_vals[f] * weights.get(f, 0) for f in features if f in norm_vals)
-            
-            if "Environment_Score" in norm_vals:
-                weighted_score += norm_vals["Environment_Score"] * weights.get("Environment_Score", 0)
-            
-            existing_sust = st.session_state.scored_data["Sustainability_Score"]
-            existing_trad = st.session_state.scored_data["Weighted_Score"]
-            sust_rank = (existing_sust > sust_score).sum() + 1
-            trad_rank = (existing_trad > weighted_score).sum() + 1
-            
-            st.markdown("---")
-            st.markdown("### Customer Score Results")
-            
-            col1, col2 = st.columns(2)
             with col1:
-                if "user_electricity" in st.session_state:
-                    st.metric("Personal Electricity Usage", f"{st.session_state.user_electricity:.2f} kWh")
-                if "Environment_Score" in new_customer:
-                    st.metric("Company Environment Score", f"{new_customer['Environment_Score']:.2f}")
+                # Display the total emissions with a metric and color coding
+                total_kg = st.session_state.total_emissions
+                total_tonnes = total_kg / 1000
                 
-                st.metric("Water Usage", f"{new_customer['Water']:.2f}")
-                st.metric("Public Transport", f"{new_customer['Public_Transport']:.2f}")
-                st.metric("Private Transport", f"{new_customer['Private_Transport']:.2f}")
+                if total_kg > 100:
+                    emissions_color = "red"
+                elif total_kg > 50:
+                    emissions_color = "orange"
+                else:
+                    emissions_color = "green"
                 
-                st.metric("Z-Score", f"{z_score:.2f}")
-                st.metric("Sustainability Score", f"{sust_score:.2f}")
-                st.metric("Sustainability Rank", f"{sust_rank}")
-                st.metric("Legacy Weighted Score", f"{weighted_score:.2f}")
-                st.metric("Legacy Rank", f"{trad_rank}")
-
-                better_than = (existing_sust < sust_score).mean() * 100
-                st.success(f"This customer performs better than **{better_than:.1f}%** of customers in the dataset (based on Z-Score)")
-
-                z_description = "above" if z_score > 0 else "below"
-                st.info(f"Performance: **{abs(z_score):.2f} SD {z_description} mean**")
+                st.metric(
+                    "Monthly CO₂ Emissions",
+                    f"{total_kg:.1f} kg CO₂e",
+                )
+                
+                st.markdown(f"<div style='color:{emissions_color}; font-size:18px;'><strong>Sustainability Rating:</strong> {['Low', 'Moderate', 'High'][int(min(2, total_kg/50))]}</div>", unsafe_allow_html=True)
+                
+                # Context comparison
+                avg_emissions = 200  # Example average emissions for commuting per person per month
+                if total_kg < avg_emissions:
+                    st.success(f"Your emissions are {(1 - total_kg/avg_emissions) * 100:.1f}% lower than the average commuter.")
+                else:
+                    st.warning(f"Your emissions are {(total_kg/avg_emissions - 1) * 100:.1f}% higher than the average commuter.")
             
             with col2:
-                all_features_weights = {
-                    feat: abs(weights.get(feat, 0))
-                    for feat in z_vals.keys()
-                }
-                all_features_weights.setdefault('Environment_Score', 0)
-                if all_features_weights['Environment_Score'] == 0:
-                    all_features_weights['Environment_Score'] = 0.15
-                
-                if "user_electricity" in st.session_state:
-                    all_features_weights.setdefault('Electricity', 0)
-                    if all_features_weights['Electricity'] == 0:
-                        all_features_weights['Electricity'] = 0.15
-                
-                all_features_weights = {
-                    f: w for f, w in all_features_weights.items()
-                    if w > 0
-                }
-                total = sum(all_features_weights.values())
-                contribs = {f: w / total for f, w in all_features_weights.items()}
-                explode = [0.1 if f in ['Environment_Score', 'Electricity'] else 0 for f in contribs]
-                fig, ax = plt.subplots(figsize=(6,6))
-                ax.pie(
-                    list(contribs.values()),
-                    labels=list(contribs.keys()),
-                    autopct='%1.1f%%',
-                    startangle=90,
-                    explode=explode
-                )
-                ax.set_title('Feature Weightage for Customer')
-                st.pyplot(fig)
-                
-                if "Environment_Score" in contribs:
-                    st.info(f"Environment Score contributes {contribs['Environment_Score']*100:.1f}%")
-                if "Electricity" in contribs:
-                    st.info(f"Electricity Usage contributes {contribs['Electricity']*100:.1f}%")
+                # Create a gauge chart for visual impact
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = total_kg,
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    title = {'text': "Monthly CO₂ Emissions (kg)"},
+                    gauge = {
+                        'axis': {'range': [None, 300], 'tickwidth': 1},
+                        'bar': {'color': emissions_color},
+                        'steps': [
+                            {'range': [0, 50], 'color': "lightgreen"},
+                            {'range': [50, 100], 'color': "yellow"},
+                            {'range': [100, 300], 'color': "salmon"}
+                        ],
+                        'threshold': {
+                            'line': {'color': "red", 'width': 4},
+                            'thickness': 0.75,
+                            'value': avg_emissions
+                        }
+                    }
+                ))
+                st.plotly_chart(fig, use_container_width=True)
             
+            # Show comparison chart of alternatives
+            st.subheader("Comparison with Alternative Transport Options")
             
-                    
-            st.markdown("---")
-            st.markdown("### Score Distribution Analysis")
-
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.histplot(existing_sust, kde=True, ax=ax)
-
-            mean_sust = existing_sust.mean()
-            std_sust = existing_sust.std()
-            ax.axvline(mean_sust, color='red', linestyle='--', 
-                    label=f'Mean ({mean_sust:.2f})')
-
-            ax.axvline(mean_sust + std_sust, color='green', linestyle=':', 
-                    label=f'+1 Std Dev ({mean_sust + std_sust:.2f})')
-            ax.axvline(mean_sust - std_sust, color='orange', linestyle=':', 
-                    label=f'-1 Std Dev ({mean_sust - std_sust:.2f})')
-
-            ax.axvline(sust_score, color='blue', linestyle='-', 
-                    label=f'This Customer ({sust_score:.2f}, Z={z_score:.2f})')
-
-            ax.set_xlabel('Sustainability Score')
-            ax.set_title('Distribution of Sustainability Scores')
-            ax.legend()
-            st.pyplot(fig)
-
-
-            st.markdown("---")
-            st.markdown("### Customer Input Weightage Analysis")
-
-            core_features = ['Water', 'MPCE', 'Public_Transport', 'Private_Transport', 'Electricity', 'Environment_Score']
-            input_data = {}
-            input_weight = {}
-
-            for feat in core_features:
-                input_data[feat] = new_customer.get(feat, 0)  # Default to 0 if not present
-                input_weight[feat] = 0.01  # Minimal weight to ensure visibility in chart
-
-            z_vals = {}
-            if 'feature_stats' in st.session_state:
-                for feat, val in new_customer.items():
-                    if feat in features:  # Only process numeric features for scoring
-                        stats = st.session_state.feature_stats.get(feat)
-                        if stats and stats['std'] > 0:
-                            z = (stats['mean'] - val)/stats['std'] if inverse_scoring else (val - stats['mean'])/stats['std']
-                            z = np.clip(z, -1, 1)  # Cap z-value between -1 and 1
-                            z_vals[feat] = z
-
-            for feat in features:
-                if feat in new_customer:
-                    input_data[feat] = new_customer[feat]
-                    
-                    weight = weights.get(feat, 0)
-                    if weight != 0 and feat in z_vals:
-                        input_weight[feat] = abs(z_vals.get(feat, 0) * weight)
-
-            if "user_electricity" in st.session_state:
-                input_data["Electricity"] = st.session_state.user_electricity
-                if st.session_state.user_electricity > 0:
-                    electricity_weight = max(0.125, st.session_state.user_electricity / 1000)
-                    elec_weight_factors = weights.get("Electricity_State", 0) + weights.get("Electricity_MPCE", 0)
-                    
-                    if elec_weight_factors > 0:
-                        input_weight["Electricity"] = electricity_weight * elec_weight_factors
-                    else:
-                        input_weight["Electricity"] = electricity_weight
-
-            if "MPCE" in new_customer and new_customer["MPCE"] is not None:
-                input_data["MPCE"] = new_customer["MPCE"]
-                mpce_weight = 0.15  # Base weight to ensure visibility
+            # Create dataframe for plotting
+            df = pd.DataFrame({
+                'Transport Mode': list(st.session_state.emissions_data.keys()),
+                'Monthly CO₂ Emissions (kg)': list(st.session_state.emissions_data.values())
+            })
+            
+            # Sort by emissions for better visualization
+            df = df.sort_values('Monthly CO₂ Emissions (kg)')
+            
+            # Create the comparison bar chart
+            fig = px.bar(
+                df, 
+                y='Transport Mode', 
+                x='Monthly CO₂ Emissions (kg)',
+                orientation='h',
+                color='Monthly CO₂ Emissions (kg)',
+                color_continuous_scale='RdYlGn_r'
+            )
+            
+            # Highlight the user's current transport mode
+            current_mode = df['Transport Mode'].iloc[-1]  # Current mode should be the first one
+            
+            fig.update_layout(height=400, width=800)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Display recommendations
+            st.header("Sustainability Recommendations")
+            for i, rec in enumerate(st.session_state.recommendations):
+                st.markdown(f"**{i+1}. {rec}**")
                 
-                if "MPCE" in z_vals:
-                    mpce_weight = max(0.15, abs(z_vals["MPCE"] * (weights.get("MPCE", 0) or 0.15)))
+        st.markdown("---")
+        st.markdown("### Score Distribution Analysis")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(existing_sust, kde=True, ax=ax)
+
+        mean_sust = existing_sust.mean()
+        std_sust = existing_sust.std()
+        ax.axvline(mean_sust, color='red', linestyle='--', 
+                label=f'Mean ({mean_sust:.2f})')
+
+        ax.axvline(mean_sust + std_sust, color='green', linestyle=':', 
+                label=f'+1 Std Dev ({mean_sust + std_sust:.2f})')
+        ax.axvline(mean_sust - std_sust, color='orange', linestyle=':', 
+                label=f'-1 Std Dev ({mean_sust - std_sust:.2f})')
+
+        ax.axvline(sust_score, color='blue', linestyle='-', 
+                label=f'This Customer ({sust_score:.2f}, Z={z_score:.2f})')
+
+        ax.set_xlabel('Sustainability Score')
+        ax.set_title('Distribution of Sustainability Scores')
+        ax.legend()
+        st.pyplot(fig)
+
+
+        st.markdown("---")
+        st.markdown("### Customer Input Weightage Analysis")
+
+        core_features = ['Water', 'MPCE', 'Public_Transport', 'Private_Transport', 'Electricity', 'Environment_Score']
+        input_data = {}
+        input_weight = {}
+
+        for feat in core_features:
+            input_data[feat] = new_customer.get(feat, 0)  # Default to 0 if not present
+            input_weight[feat] = 0.01  # Minimal weight to ensure visibility in chart
+
+        z_vals = {}
+        if 'feature_stats' in st.session_state:
+            for feat, val in new_customer.items():
+                if feat in features:  # Only process numeric features for scoring
+                    stats = st.session_state.feature_stats.get(feat)
+                    if stats and stats['std'] > 0:
+                        z = (stats['mean'] - val)/stats['std'] if inverse_scoring else (val - stats['mean'])/stats['std']
+                        z = np.clip(z, -1, 1)  # Cap z-value between -1 and 1
+                        z_vals[feat] = z
+
+        for feat in features:
+            if feat in new_customer:
+                input_data[feat] = new_customer[feat]
+                
+                weight = weights.get(feat, 0)
+                if weight != 0 and feat in z_vals:
+                    input_weight[feat] = abs(z_vals.get(feat, 0) * weight)
+
+        if "user_electricity" in st.session_state:
+            input_data["Electricity"] = st.session_state.user_electricity
+            if st.session_state.user_electricity > 0:
+                electricity_weight = max(0.125, st.session_state.user_electricity / 1000)
+                elec_weight_factors = weights.get("Electricity_State", 0) + weights.get("Electricity_MPCE", 0)
+                
+                if elec_weight_factors > 0:
+                    input_weight["Electricity"] = electricity_weight * elec_weight_factors
                 else:
-                    if new_customer["MPCE"] > 0:
-                        mpce_weight = max(0.15, 0.1 + (new_customer["MPCE"] / 10000))
-                        
-                input_weight["MPCE"] = mpce_weight
+                    input_weight["Electricity"] = electricity_weight
 
-            if "Environment_Score" in new_customer and new_customer["Environment_Score"] is not None:
-                input_data["Environment_Score"] = new_customer["Environment_Score"]
-                
-                env_weight = 0.15  # Higher base value to ensure visibility
-                
-                if "Environment_Score" in z_vals:
-                    env_weight = max(0.15, abs(z_vals["Environment_Score"] * (weights.get("Environment_Score", 0) or 0.15)))
-                else:
-                    if 'company_data' in locals() or 'company_data' in globals():
-                        if "Environment_Score" in company_data.columns:
-                            mean = company_data["Environment_Score"].mean()
-                            std = company_data["Environment_Score"].std()
-                            if std > 0:  # Avoid division by zero
-                                env_z_score = (mean - new_customer["Environment_Score"])/std if inverse_scoring else (new_customer["Environment_Score"] - mean)/std
-                                env_z_score = np.clip(env_z_score, -1, 1)
-                                env_weight = max(0.15, abs(env_z_score * (weights.get("Environment_Score", 0) or 0.15)))
-                
-                input_weight["Environment_Score"] = env_weight
-
-            input_weight = {k: max(v, 0.01) for k, v in input_weight.items()}
-
-            for feat in core_features:
-                if feat in input_data:
-                    input_weight[feat] = max(input_weight.get(feat, 0), 0.01)
-
-            if input_weight:
-                total_weight = sum(input_weight.values())
-                if total_weight > 0:  # Prevent division by zero
-                    weighted_inputs = {k: v/total_weight for k, v in input_weight.items()}
+        if "MPCE" in new_customer and new_customer["MPCE"] is not None:
+            input_data["MPCE"] = new_customer["MPCE"]
+            mpce_weight = 0.15  # Base weight to ensure visibility
+            
+            if "MPCE" in z_vals:
+                mpce_weight = max(0.15, abs(z_vals["MPCE"] * (weights.get("MPCE", 0) or 0.15)))
+            else:
+                if new_customer["MPCE"] > 0:
+                    mpce_weight = max(0.15, 0.1 + (new_customer["MPCE"] / 10000))
                     
-                    col1, col2 = st.columns(2)
+            input_weight["MPCE"] = mpce_weight
+
+        if "Environment_Score" in new_customer and new_customer["Environment_Score"] is not None:
+            input_data["Environment_Score"] = new_customer["Environment_Score"]
+            
+            env_weight = 0.15  # Higher base value to ensure visibility
+            
+            if "Environment_Score" in z_vals:
+                env_weight = max(0.15, abs(z_vals["Environment_Score"] * (weights.get("Environment_Score", 0) or 0.15)))
+            else:
+                if 'company_data' in locals() or 'company_data' in globals():
+                    if "Environment_Score" in company_data.columns:
+                        mean = company_data["Environment_Score"].mean()
+                        std = company_data["Environment_Score"].std()
+                        if std > 0:  # Avoid division by zero
+                            env_z_score = (mean - new_customer["Environment_Score"])/std if inverse_scoring else (new_customer["Environment_Score"] - mean)/std
+                            env_z_score = np.clip(env_z_score, -1, 1)
+                            env_weight = max(0.15, abs(env_z_score * (weights.get("Environment_Score", 0) or 0.15)))
+            
+            input_weight["Environment_Score"] = env_weight
+
+        input_weight = {k: max(v, 0.01) for k, v in input_weight.items()}
+
+        for feat in core_features:
+            if feat in input_data:
+                input_weight[feat] = max(input_weight.get(feat, 0), 0.01)
+
+        if input_weight:
+            total_weight = sum(input_weight.values())
+            if total_weight > 0:  # Prevent division by zero
+                weighted_inputs = {k: v/total_weight for k, v in input_weight.items()}
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig, ax = plt.subplots(figsize=(8, 8))
                     
-                    with col1:
-                        fig, ax = plt.subplots(figsize=(8, 8))
-                        
-                        sorted_inputs = sorted(weighted_inputs.items(), key=lambda x: x[1], reverse=True)
-                        input_labels = [f[0] for f in sorted_inputs]
-                        input_sizes = [f[1] for f in sorted_inputs]
-                        
-                        if len(input_labels) < len(core_features):
-                            for feat in core_features:
-                                if feat not in input_labels and feat in input_data:
-                                    input_labels.append(feat)
-                                    input_sizes.append(0.005)  # Small but visible slice
-                        
-                        if len(input_labels) > 10:
-                            other_weight = sum(input_sizes[10:])
-                            input_labels = input_labels[:10] + ["Others"]
-                            input_sizes = input_sizes[:10] + [other_weight]
-                        
-                        fig = px.pie(
-                            values=input_sizes,
-                            names=input_labels,
-                            title='Customer Input Weightage Distribution'
-                        )
-                        fig.update_traces(textposition='inside', textinfo='percent+label')
-                        fig.update_layout(
-                            showlegend=False,
-                            margin=dict(t=40, l=0, r=0, b=0),
-                            height=400
-                        )
-                        st.plotly_chart(fig)
+                    sorted_inputs = sorted(weighted_inputs.items(), key=lambda x: x[1], reverse=True)
+                    input_labels = [f[0] for f in sorted_inputs]
+                    input_sizes = [f[1] for f in sorted_inputs]
                     
-                    with col2:
-                        input_table = []
-                        
-                        for feat in sorted(input_data.keys()):
-                            if feat in features or feat in core_features:  # Include core features regardless of being in features
-                                weight_val = input_weight.get(feat, 0)
-                                contrib_pct = (weight_val/total_weight)*100 if total_weight > 0 else 0.00
-                                input_table.append({
-                                    "Input Field": feat,
-                                    "Value": input_data[feat],
-                                    "Weightage Score": weight_val,
-                                    "Contribution %": f"{contrib_pct:.2f}%"
-                                })
-                        
-                        input_df = pd.DataFrame(input_table)
-                        st.write("Individual Input Weightage Scores")
-                        st.dataframe(input_df)
+                    if len(input_labels) < len(core_features):
+                        for feat in core_features:
+                            if feat not in input_labels and feat in input_data:
+                                input_labels.append(feat)
+                                input_sizes.append(0.005)  # Small but visible slice
+                    
+                    if len(input_labels) > 10:
+                        other_weight = sum(input_sizes[10:])
+                        input_labels = input_labels[:10] + ["Others"]
+                        input_sizes = input_sizes[:10] + [other_weight]
+                    
+                    fig = px.pie(
+                        values=input_sizes,
+                        names=input_labels,
+                        title='Customer Input Weightage Distribution'
+                    )
+                    fig.update_traces(textposition='inside', textinfo='percent+label')
+                    fig.update_layout(
+                        showlegend=False,
+                        margin=dict(t=40, l=0, r=0, b=0),
+                        height=400
+                    )
+                    st.plotly_chart(fig)
+                
+                with col2:
+                    input_table = []
+                    
+                    for feat in sorted(input_data.keys()):
+                        if feat in features or feat in core_features:  # Include core features regardless of being in features
+                            weight_val = input_weight.get(feat, 0)
+                            contrib_pct = (weight_val/total_weight)*100 if total_weight > 0 else 0.00
+                            input_table.append({
+                                "Input Field": feat,
+                                "Value": input_data[feat],
+                                "Weightage Score": weight_val,
+                                "Contribution %": f"{contrib_pct:.2f}%"
+                            })
+                    
+                    input_df = pd.DataFrame(input_table)
+                    st.write("Individual Input Weightage Scores")
+                    st.dataframe(input_df)
                            
         
     
