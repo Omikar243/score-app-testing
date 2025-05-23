@@ -1095,14 +1095,10 @@ if "synth_data_raw" in st.session_state:
             
         with col2:
             st.markdown("### Sustainability Score vs Features")
-            synth_features = [
-                c for c in st.session_state.synth_data_raw.columns
-                if c not in ["ID", "Weighted_Score", "Rank", "Z_Score", "Sustainability_Score",
-                        "Company_Name", "Sector_classification", "State_UT",
-                        "Total_Employees"]
-            ]
             
-            features = synth_features
+            # Limited feature options
+            features = ["Water", "Public Transport", "Private Transport"]
+            
             feature_to_plot = st.selectbox("Select Feature", features)
             fig, ax = plt.subplots()
             
@@ -1117,40 +1113,7 @@ if "synth_data_raw" in st.session_state:
         
             
         
-        if "Electricity" in st.session_state.synth_data_raw.columns and "MPCE" in st.session_state.synth_data_raw.columns:
-            st.markdown("---\n### Electricity-MPCE Analysis")
-            fig, ax = plt.subplots()
-            ratio = st.session_state.synth_data_raw["Electricity"] / st.session_state.synth_data_raw["MPCE"]
-            ax.scatter(st.session_state.synth_data_raw["MPCE"], ratio,
-                    c=st.session_state.scored_data["Sustainability_Score"], cmap='viridis')
-            ax.set_xlabel("Monthly Per Capita Expenditure (MPCE)")
-            ax.set_ylabel("Electricity/MPCE Ratio")
-            ax.set_title("Affordability Analysis")
-            fig.colorbar(ax.collections[0], label="Sustainability Score")
-            st.pyplot(fig)
-            
-            # Affordability quartiles
-            ratio_quartiles = pd.qcut(ratio, 4, labels=["Excellent", "Good", "Fair", "Poor"])
-            st.markdown("### Affordability Quartiles")
-            affordability_df = pd.DataFrame({
-                "MPCE": st.session_state.synth_data_raw["MPCE"],
-                "Electricity": st.session_state.synth_data_raw["Electricity"],
-                "Ratio": ratio,
-                "Quartile": ratio_quartiles,
-                "Sustainability_Score": st.session_state.scored_data["Sustainability_Score"],
-                "Water": st.session_state.synth_data_raw["Water"],
-                "Public_Transport": st.session_state.synth_data_raw["Public_Transport"],
-                "Private_Transport": st.session_state.synth_data_raw["Private_Transport"]
-            })
-            st.dataframe(affordability_df.groupby("Quartile").agg({
-                "MPCE": "mean",
-                "Electricity": "mean",
-                "Ratio": "mean",
-                "Sustainability_Score": "mean",
-                "Water": "mean",
-                "Public_Transport": "mean",
-                "Private_Transport": "mean"
-            }))
+        
 
 st.markdown("---\n# Test New Customer")
 test_mode = st.radio("Input Mode", ["Manual Entry", "CSV Upload"], key="test_mode")
@@ -2795,6 +2758,103 @@ if st.button("Evaluate Customer"):
                     input_df = pd.DataFrame(input_table)
                     st.write("Individual Input Weightage Scores")
                     st.dataframe(input_df)
+
+        # Integrated Data Insights section
+        if "scored_data" in st.session_state:
+            st.markdown("---\n## Data Insights")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### Feature Correlations")
+                numeric_cols = [col for col in st.session_state.synth_data_raw.columns
+                                if st.session_state.synth_data_raw[col].dtype in [np.int64, np.float64]]
+                corr = st.session_state.synth_data_raw[numeric_cols].corr()
+                fig, ax = plt.subplots(figsize=(10, 8))
+                sns.heatmap(corr, annot=True, cmap='coolwarm', ax=ax)
+                st.pyplot(fig)
+                
+            with col2:
+                st.markdown("### Sustainability Score vs Features")
+                synth_features = [
+                    c for c in st.session_state.synth_data_raw.columns
+                    if c not in ["ID", "Weighted_Score", "Rank", "Z_Score", "Sustainability_Score",
+                            "Company_Name", "Sector_classification", "State_UT",
+                            "Total_Employees"]
+                ]
+                
+                # Add company data option if company_data exists
+                company_data_features = []
+                if 'company_data' in st.session_state and st.session_state.company_data is not None:
+                    company_data_features.append("Company Data (Environment Score)")
+                
+                # Combine synthetic features with company data features
+                all_features = synth_features + company_data_features
+                
+                feature_to_plot = st.selectbox("Select Feature", all_features)
+                fig, ax = plt.subplots()
+                
+                # Handle different feature types
+                if feature_to_plot == "Company Data (Environment Score)":
+                    # Special handling for company data
+                    if 'company_data' in st.session_state and st.session_state.company_data is not None:
+                        company_data = st.session_state.company_data
+                        
+                        # Get companies that exist in both datasets
+                        common_companies = set(company_data['Company_Name']).intersection(
+                            set(st.session_state.scored_data['Company_Name']) if 'Company_Name' in st.session_state.scored_data.columns 
+                            else set()
+                        )
+                        
+                        if common_companies:
+                            # Merge data for common companies
+                            merged_data = pd.merge(
+                                company_data[['Company_Name', 'Environment_Score']], 
+                                st.session_state.scored_data[['Company_Name', 'Sustainability_Score']], 
+                                on='Company_Name', 
+                                how='inner'
+                            )
+                            
+                            if len(merged_data) > 0:
+                                ax.scatter(merged_data['Environment_Score'], merged_data['Sustainability_Score'])
+                                ax.set_xlabel('Environment Score')
+                                ax.set_ylabel('Sustainability Score')
+                                ax.set_title('Environment Score vs Sustainability Score')
+                                
+                                # Add company names as annotations (optional, for small datasets)
+                                if len(merged_data) <= 20:
+                                    for i, row in merged_data.iterrows():
+                                        ax.annotate(row['Company_Name'], 
+                                                (row['Environment_Score'], row['Sustainability_Score']),
+                                                xytext=(5, 5), textcoords='offset points', 
+                                                fontsize=8, alpha=0.7)
+                            else:
+                                st.warning("No matching companies found between company data and sustainability data")
+                                x_data = None
+                        else:
+                            st.warning("No common companies found between datasets")
+                            x_data = None
+                    else:
+                        st.warning("Company data not available")
+                        x_data = None
+                        
+                elif feature_to_plot in st.session_state.synth_data_raw.columns:
+                    # Handle synthetic features
+                    x_data = st.session_state.synth_data_raw[feature_to_plot]
+                    ax.scatter(x_data, st.session_state.scored_data["Sustainability_Score"])
+                    ax.set_xlabel(feature_to_plot)
+                    ax.set_ylabel("Sustainability Score")
+                    ax.set_title(f"{feature_to_plot} vs Sustainability Score")
+                    
+                else:
+                    # Handle case where feature is not found
+                    st.warning(f"Feature '{feature_to_plot}' not found in current dataset")
+                    x_data = None
+                
+                # Only show plot if we have valid data and it's not the company data case
+                if feature_to_plot != "Company Data (Environment Score)" and 'x_data' in locals() and x_data is not None:
+                    st.pyplot(fig)
+                elif feature_to_plot == "Company Data (Environment Score)":
+                    st.pyplot(fig)
                            
         
     
