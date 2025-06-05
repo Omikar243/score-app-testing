@@ -9,10 +9,6 @@ import plotly.graph_objects as go
 import json
 from io import BytesIO
 from fpdf import FPDF
-import folium
-from folium.plugins import HeatMap
-from streamlit_folium import folium_static
-import branca.colormap as cm
 
 # Page configuration and styling
 st.set_page_config(page_title="Resource Sustainability Dashboard", layout="wide")
