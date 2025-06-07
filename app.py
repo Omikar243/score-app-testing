@@ -10,6 +10,7 @@ import json
 from io import BytesIO
 from fpdf import FPDF
 
+
 # Page configuration and styling
 st.set_page_config(page_title="Resource Sustainability Dashboard", layout="wide")
 st.markdown("""
@@ -77,6 +78,7 @@ def load_company_data():
         st.session_state.company_data = df
 
     return st.session_state.company_data
+
 
 def load_real_electricity_data():
     """Load electricity consumption data from file path"""
@@ -157,6 +159,102 @@ company_data = load_company_data()
 if company_data is not None:
     st.success(f"Loaded {len(company_data)} companies")
     st.dataframe(company_data, use_container_width=True)
+    st.subheader("Company Environmental Performance Comparison")
+            
+    company_scores = company_data.sort_values("Environment_Score", ascending=False)
+    top_n = min(20, len(company_scores))  # Top 20 or all if less than 20
+    top_companies = company_scores.head(top_n)
+           
+    fig = px.bar(top_companies,
+                x="Environment_Score", 
+                y="Company_Name",
+                title="Top Companies by Environmental Score",
+                orientation='h',  # Horizontal bars
+                color="Environment_Score",
+                color_continuous_scale="viridis")
+            
+    fig.update_layout(
+            xaxis_title="Environment Score",
+            yaxis_title="Company",
+            yaxis=dict(autorange="reversed"),  
+            height=600
+            )
+            
+    st.plotly_chart(fig, use_container_width=True)
+            
+    if "Sector_classification" in company_data.columns:
+                sector_avg = company_data.groupby("Sector_classification")["Environment_Score"].agg(
+                    ['mean', 'count', 'std']
+                ).sort_values('mean', ascending=False)
+
+                fig = px.bar(
+                    sector_avg.reset_index(),
+                    x='Sector_classification', 
+                    y='mean',
+                    error_y='std',
+                    title="Average Environmental Score by Sector",
+                    labels={
+                        'Sector_classification': 'Sector',
+                        'mean': 'Average Environment Score',
+                        'count': 'Number of Companies'
+                    }
+                )
+
+                fig.update_layout(
+                    xaxis_tickangle=-45,
+                    height=600,
+                    showlegend=False
+                )
+
+                for i in range(len(sector_avg)):
+                    fig.add_annotation(
+                        x=sector_avg.index[i],
+                        y=sector_avg['mean'][i],
+                        text=f"n={int(sector_avg['count'][i])}",
+                        showarrow=False,
+                        yshift=10
+                    )
+
+                # Display plot
+                st.plotly_chart(fig, use_container_width=True)
+                
+                fig = px.box(company_data, 
+                           x="Sector_classification", 
+                           y="Environment_Score",
+                           title="Distribution of Environmental Scores by Sector",
+                           color="Sector_classification")
+                
+                fig.update_layout(
+                    xaxis_title="Sector",
+                    yaxis_title="Environment Score", 
+                    xaxis_tickangle=45,
+                    showlegend=False,
+                    height=600)
+                
+                st.plotly_chart(fig)
+                
+                # Scatter plot with plotly
+                if "Total_Employees" in company_data.columns:
+                    fig = px.scatter(company_data,
+                                   x="Total_Employees",
+                                   y="Environment_Score",
+                                   color="Sector_classification", 
+                                   title="Environment Score vs Company Size",
+                                   opacity=0.6)
+                    
+                    fig.update_layout(
+                        xaxis_title="Number of Employees",
+                        yaxis_title="Environment Score",
+                        height=600,
+                        legend=dict(
+                            yanchor="top",
+                            y=1,
+                            xanchor="left",
+                            x=1.02
+                        ))
+                    
+                    st.plotly_chart(fig)
+
 else:
     st.info("Please upload company data CSV")
     template = pd.DataFrame({
@@ -541,137 +639,61 @@ test_mode = st.radio("Input Mode", ["Manual Entry", "CSV Upload"], key="test_mod
 
 features = ["Electricity", "Water (Monthly or Daily)", "Public_Transport", "Private_Transport", "Industry (Sector_classification)", "Number of Employees"]
 
+test_mode = "CSV Upload"
+
 if test_mode == "CSV Upload":
-        st.markdown("### Upload Test Data")   
-        
+        st.markdown("### Upload Test Data")
+
         # Always show template downloads
         st.markdown("#### Download Template")
+
         
-# 1. Define the required columns for the CSV template (exactly matching the manual form):
-        required_cols = [
-            "Industry (Sector_classification)",
-            "Number of Employees",
-            "Electricity",
-            "People in the household",
-            "Water (Monthly or Daily)",
-            "Water (Monthly or Daily) Value",
-            "State (Drop Down)",
-            "Rural/Urban",
-            "Vehicle (Drop Down)",
-            "Category (Drop Down)",
-            "Engine (Drop Down)",
-            "Km_per_month",
-            "Crisil_ESG_Score"
-        ]
+        template_file_path = "customer_template (1).xlsx"
+        try:
+            with open(template_file_path, "rb") as file:
+                st.download_button(
+                    label="Download Excel Template (with Data Validation)",
+                    data=file,
+                    file_name="customer_template_with_validation.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        except FileNotFoundError:
+            st.error(f"Error: Template file not found at '{template_file_path}'. Please make sure the file is in the correct directory.")
 
-        template_data = {
-            "Industry (Sector_classification)": [
-                "Manufacturing",
-                "IT Services",
-                "Healthcare",
-                "Automotive",
-                "FMCG"
-            ],
-            "Number of Employees": [
-                50,
-                200,
-                75,
-                120,
-                300
-            ],
-            "Electricity": [
-                350.0,
-                1200.0,
-                800.0,
-                450.0,
-                1600.0
-            ],  # Monthly kWh
-            "People in the household": [
-                4,
-                2,
-                5,
-                3,
-                6
-            ],
-            "Water (Monthly or Daily)": [
-                "monthly",
-                "daily",
-                "monthly",
-                "daily",
-                "monthly"
-            ],
-            "Water (Monthly or Daily) Value": [
-                2000.0,
-                150.0,
-                4500.0,
-                100.0,
-                5200.0
-            ],  # If monthly: liters/month total; if daily: liters/person/day
-            "State (Drop Down)": [
-                "Karnataka",
-                "Maharashtra",
-                "Delhi",
-                "Tamil Nadu",
-                "Gujarat"
-            ],
-            "Rural/Urban": [
-                "urban",
-                "rural",
-                "urban",
-                "urban",
-                "rural"
-            ],
-            "Vehicle (Drop Down)": [
-                "two_wheeler",
-                "four_wheeler",
-                "three_wheeler",
-                "public_transport",
-                "four_wheeler"
-            ],
-            "Category (Drop Down)": [
-                "Scooter",      # when two_wheeler
-                "sedan",        # when four_wheeler
-                "petrol",       # when three_wheeler (will treat 'petrol' as a category under three_wheeler)
-                "bus",          # when public_transport
-                "compact_suv"   # when four_wheeler
-            ],
-            "Engine (Drop Down)": [
-                "petrol",
-                "electric",
-                "cng",
-                "electric",
-                "diesel"
-            ],
-            "Km_per_month": [
-                600.0,
-                1500.0,
-                500.0,
-                2000.0,
-                1200.0
-            ],
-            "Crisil_ESG_Score": [
-                70.0,
-                85.0,
-                60.0,
-                90.0,
-                75.0
-            ]
-        }
-
-        # 3. Build a DataFrame from template_data and offer it for download:
-        template_df = pd.DataFrame(template_data)
-        tmpl_csv = template_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download CSV Template (with Examples)",
-            data=tmpl_csv,
-            file_name="customer_template.csv",
-            mime="text/csv"
-        )
-
-        # 4. File uploader for test CSV
-        up_test = st.file_uploader("Upload Test CSV", type="csv")
+        # File uploader for test CSV
+        up_test = st.file_uploader("Upload Test Data", type=["csv", "xlsx", "xls"])
         if up_test:
-            test_df = pd.read_csv(up_test)
+            try:
+                if up_test.name.endswith('.csv'):
+                    # Try multiple encodings for CSV files
+                    encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+                    test_df = None
+                    
+                    for encoding in encodings_to_try:
+                        try:
+                            # Reset file pointer
+                            up_test.seek(0)
+                            test_df = pd.read_csv(up_test, encoding=encoding)
+                            st.success(f"Successfully loaded CSV with {encoding} encoding")
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                        except Exception as e:
+                            st.warning(f"Failed to read with {encoding} encoding: {str(e)}")
+                            continue
+                    
+                    if test_df is None:
+                        st.error("Could not read the CSV file with any of the supported encodings. Please check your file format.")
+                        st.stop()
+                else:
+                    # Handle Excel files
+                    test_df = pd.read_excel(up_test)
+                    
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+                st.stop()
+                
+            
             st.markdown("#### Uploaded Test Data")
             st.dataframe(test_df)
 
@@ -743,6 +765,7 @@ if test_mode == "CSV Upload":
                     },
                     # Public transport
                     "public_transport": {
+                        "base_emission": 0.03,  # Base emission factor for generic public transport
                         "taxi": {
                             "small": {
                                 "petrol": {"base": 0.12, "uplift": 1.1},
@@ -779,188 +802,203 @@ if test_mode == "CSV Upload":
                     }
                 }
 
-                # ────────────────────────────────────────────────────────────────────────
                 test_with_scores = []
 
                 for _, row in test_df.iterrows():
-                    industry = str(row["Industry (Sector_classification)"]).strip()
-                    num_employees = int(row["Number of Employees"]) if not pd.isna(row["Number of Employees"]) else 0
+                    try:
+                        industry = str(row["Industry (Sector_classification)"]).strip()
+                        num_employees = int(row["Number of Employees"]) if not pd.isna(row["Number of Employees"]) else 0
+                        
+                        if num_employees < 5000:
+                            emp_size = 'Small (<5,000)'
+                        elif 5000 <= num_employees <= 15000:
+                            emp_size = 'Medium (5,000 to 15,000)'
+                        else:
+                            emp_size = 'Large (>15,000)'
+                        electricity_kwh = float(row["Electricity"]) if not pd.isna(row["Electricity"]) else 0.0
+                        household_count = int(row["People in the household"]) if not pd.isna(row["People in the household"]) else 1
+                        water_input = str(row["Water (Monthly or Daily)"]).strip().lower()
+                        water_value = float(row["Water (Monthly or Daily) Value"]) if not pd.isna(row["Water (Monthly or Daily) Value"]) else 0.0
+                        if water_input == "daily":
+                            # Assume 'water_value' is liters/person/day
+                            total_water_liters = water_value * 30 * household_count
+                        else:
+                            # Assume 'water_value' is total liters/month
+                            total_water_liters = water_value * household_count
 
-                    electricity_kwh = float(row["Electricity"]) if not pd.isna(row["Electricity"]) else 0.0
+                        try:
+                            state_ut = str(row.get("State (Drop Down)", row.get("State", ""))).strip().lower()
+                            rural_urban = str(row.get("Rural/Urban", "rural")).strip().lower()
+                        except Exception as e:
+                            st.warning(f"Missing state or sector information: {str(e)}")
+                            state_ut = ""
+                            rural_urban = "rural"
+                        vehicle_type = str(row["Vehicle (Drop Down)"]).strip()
+                        engine_fuel = str(row["Engine (Drop Down)"]).strip()
+                        km_per_month = float(row["Km_per_month"]) if not pd.isna(row["Km_per_month"]) else 0.0
+                        crisil_esg = float(row["Crisil_ESG_Score"]) if not pd.isna(row["Crisil_ESG_Score"]) else 0.0
 
-                    household_count = int(row["People in the household"]) if not pd.isna(row["People in the household"]) else 1
+                        # Calculate commute emissions
 
-                    water_input = str(row["Water (Monthly or Daily)"]).strip().lower()
-                    water_value  = float(row["Water (Monthly or Daily) Value"]) if not pd.isna(row["Water (Monthly or Daily) Value"]) else 0.0
-                    if water_input == "daily":
-                        # Assume 'water_value' is liters/person/day
-                        total_water_liters = water_value * 30 * household_count
-                    else:
-                        # Assume 'water_value' is total liters/month
-                        total_water_liters = water_value * household_count
+                        # Initialize commute_emission
+                        commute_emission = 0.0
+                        
+                        # Handle both lowercase and title case vehicle types
+                        vehicle_type_lower = vehicle_type.lower() if isinstance(vehicle_type, str) else ""
+                        
+                        if vehicle_type_lower == "two_wheeler" or vehicle_type_lower == "2 wheeler":
+                            if engine_fuel in emission_factors["two_wheeler"]:
+                                ef_min = emission_factors["two_wheeler"]["Scooter"][engine_fuel]["min"]
+                                ef_max = emission_factors["two_wheeler"]["Scooter"][engine_fuel]["max"]
+                                chosen_ef = (ef_min + ef_max) / 2
+                                commute_emission = chosen_ef * (km_per_month / 1000.0)
+                        
+                        elif vehicle_type == "three_wheeler":
+                            if engine_fuel in emission_factors["three_wheeler"]:
+                                ef_min = emission_factors["three_wheeler"][engine_fuel]["min"]
+                                ef_max = emission_factors["three_wheeler"][engine_fuel]["max"]
+                                chosen_ef = (ef_min + ef_max) / 2
+                                commute_emission = chosen_ef * (km_per_month / 1000.0)
 
-                    state_ut = str(row["State (Drop Down)"]).strip().lower()
-                    rural_urban = str(row["Rural/Urban"]).strip().lower()
+                        elif vehicle_type == "four_wheeler":
+                            if engine_fuel in emission_factors["four_wheeler"]:
+                                base = emission_factors["four_wheeler"][engine_fuel]["base"]
+                                uplift = emission_factors["four_wheeler"][engine_fuel]["uplift"]
+                                chosen_ef = base * uplift
+                                commute_emission = chosen_ef * (km_per_month / 1000.0)
 
-                    vehicle_type = str(row["Vehicle (Drop Down)"]).strip()
-                    category    = str(row["Category (Drop Down)"]).strip()
-                    engine_fuel = str(row["Engine (Drop Down)"]).strip()
-                    km_per_month = float(row["Km_per_month"]) if not pd.isna(row["Km_per_month"]) else 0.0
+                        elif vehicle_type == "public_transport":
+                            # Public transport now has a single, simple calculation
+                            chosen_ef = emission_factors["public_transport"]["base_emission"]
+                            commute_emission = chosen_ef * (km_per_month / 1000.0)
 
-                    crisil_esg = float(row["Crisil_ESG_Score"]) if not pd.isna(row["Crisil_ESG_Score"]) else 0.0
+                        # --- Z-Score and Final Score Calculation (Unchanged) ---
+                        elec_z = max(0.0, (electricity_kwh - 300.0) / 300.0)
+                        water_z = max(0.0, (total_water_liters - 3900.0) / 3900.0)
 
-                    if vehicle_type == "two_wheeler":
-                        ef_min = emission_factors["two_wheeler"][category][engine_fuel]["min"]
-                        ef_max = emission_factors["two_wheeler"][category][engine_fuel]["max"]
-                        chosen_ef = (ef_min + ef_max) / 2
-                        commute_emission = chosen_ef * (km_per_month / 1000.0)
+                        if vehicle_type == "public_transport":
+                            commute_z = -min(1.0, commute_emission / 500.0)
+                        else:
+                            commute_z = commute_emission / 1000.0
 
-                    elif vehicle_type == "three_wheeler":
-                        ef_min = emission_factors["three_wheeler"][engine_fuel]["min"]
-                        ef_max = emission_factors["three_wheeler"][engine_fuel]["max"]
-                        chosen_ef = (ef_min + ef_max) / 2
-                        commute_emission = chosen_ef * (km_per_month / 1000.0)
+                        # Calculate Z-scores
+                        elec_z = max(0.0, (electricity_kwh - 300.0) / 300.0)
+                        water_z = max(0.0, (total_water_liters - 3900.0) / 3900.0)
 
-                    elif vehicle_type == "four_wheeler":
-                        base   = emission_factors["four_wheeler"][category][engine_fuel]["base"]
-                        uplift = emission_factors["four_wheeler"][category][engine_fuel]["uplift"]
-                        chosen_ef = base * uplift
-                        commute_emission = chosen_ef * (km_per_month / 1000.0)
+                        if vehicle_type in ["two_wheeler", "three_wheeler", "four_wheeler"]:
+                            commute_z = commute_emission / 1000.0
+                        else:
+                            commute_z = -min(1.0, commute_emission / 500.0)
 
-                    else:  # public_transport
-                        if category in emission_factors["public_transport"]:
-                            factor = emission_factors["public_transport"][category]
-                            if category == "taxi":
-                                subcat = "small"  # default to small if not specified
-                                sub_factor = emission_factors["public_transport"]["taxi"][subcat][engine_fuel]
-                                commute_emission = sub_factor["base"] * sub_factor["uplift"] * (km_per_month / 1000.0)
-                            elif category == "bus":
-                                commute_emission = factor[engine_fuel] * (km_per_month / 1000.0)
-                            elif category == "metro":
-                                commute_emission = factor * (km_per_month / 1000.0)
-                            else:
-                                commute_emission = 0.0
+                        company_z = -(crisil_esg / 100.0)
 
-                    elec_z = max(0.0, (electricity_kwh - 300.0) / 300.0)
+                        z_total = (
+                            water_z * 0.25
+                            + elec_z * 0.25
+                            + commute_z * 0.25
+                            + company_z * 0.10
+                        )
 
-                    water_z = max(0.0, (total_water_liters - 3900.0) / 3900.0)
+                        sust_score = 500.0 * (1.0 - np.tanh(z_total / 2.5))
 
-                    if vehicle_type in ["two_wheeler", "three_wheeler", "four_wheeler"]:
-                        commute_z = commute_emission / 1000.0
-                    else:
-                        commute_z = -min(1.0, commute_emission / 500.0)
+                        result = row.to_dict()
+                        result.update({
+                            "Electricity_Z": elec_z,
+                            "Water_Z": water_z,
+                            "Commute_Z": commute_z,
+                            "Company_Z": company_z,
+                            "Z_Total": z_total,
+                            "Sustainability_Score": sust_score
+                        })
+                        test_with_scores.append(result)
+                        
+                    except Exception as e:
+                        st.warning(f"Error processing row {len(test_with_scores) + 1}: {str(e)}")
+                        continue
 
-                    company_z = -(crisil_esg / 100.0)
-
-                    # 4) Combine these z‐values with the exact same weights your manual branch uses.
-                    #    Example weights (adjust if your manual code differs):
-                    #      water_z           * 0.25
-                    #      elec_z            * 0.25
-                    #      commute_z         * 0.25
-                    #      company_z         * 0.10
-                    #      [public_transport_z * 0.15]  <- if your manual branch treated public separately
-                    z_total = (
-                        water_z * 0.25
-                        + elec_z * 0.25
-                        + commute_z * 0.25
-                        + company_z * 0.10
-                    )
-                    # If your manual branch also had a distinct public_transport_z term:
-                    # public_transport_z = -min(1.0, (commute_emission / 500.0))
-                    # z_total += public_transport_z * 0.15
-
-                    sust_score = 500.0 * (1.0 - np.tanh(z_total / 2.5))
-
-                    result = row.to_dict()
-                    result.update({
-                        "Electricity_Z":          elec_z,
-                        "Water_Z":                water_z,
-                        "Commute_Z":              commute_z,
-                        "Company_Z":              company_z,
-                        "Z_Total":                z_total,
-                        "Sustainability_Score":   sust_score
-                    })
-                    test_with_scores.append(result)
+                if not test_with_scores:
+                    st.error("No valid data could be processed. Please check your CSV format and data.")
+                    st.stop()
 
                 results_df = pd.DataFrame(test_with_scores)
                 st.markdown("### Test Results")
                 st.dataframe(results_df)
 
                 st.markdown("### Comprehensive Metrics")
-                
+
                 col1, col2, col3, col4 = st.columns(4)
-                
+
                 with col1:
                     avg_score = results_df['Sustainability_Score'].mean()
                     st.metric("Average Score", f"{avg_score:.1f}")
-                
+
                 with col2:
                     max_score = results_df['Sustainability_Score'].max()
                     st.metric("Highest Score", f"{max_score:.1f}")
-                
+
                 with col3:
                     min_score = results_df['Sustainability_Score'].min()
                     st.metric("Lowest Score", f"{min_score:.1f}")
-                
+
                 with col4:
                     total_customers = len(results_df)
                     st.metric("Total Customers", total_customers)
 
                 col5, col6, col7, col8 = st.columns(4)
-                
+
                 with col5:
                     median_score = results_df['Sustainability_Score'].median()
                     st.metric("Median Score", f"{median_score:.1f}")
-                
+
                 with col6:
                     std_score = results_df['Sustainability_Score'].std()
                     st.metric("Standard Deviation", f"{std_score:.1f}")
-                
+
                 with col7:
                     excellent_count = len(results_df[results_df['Sustainability_Score'] >= 400])
                     excellent_pct = (excellent_count / total_customers * 100) if total_customers > 0 else 0
                     st.metric("Excellent Scores", f"{excellent_count} ({excellent_pct:.1f}%)")
-                
+
                 with col8:
                     poor_count = len(results_df[results_df['Sustainability_Score'] < 200])
                     poor_pct = (poor_count / total_customers * 100) if total_customers > 0 else 0
                     st.metric("Poor Scores", f"{poor_count} ({poor_pct:.1f}%)")
 
                 col9, col10, col11, col12 = st.columns(4)
-                
+
                 with col9:
                     avg_electricity = results_df['Electricity'].mean()
                     st.metric("Avg Electricity (kWh)", f"{avg_electricity:.1f}")
-                
+
                 with col10:
                     avg_employees = results_df['Number of Employees'].mean()
                     st.metric("Avg Employees", f"{avg_employees:.0f}")
-                
+
                 with col11:
                     avg_esg = results_df['Crisil_ESG_Score'].mean()
                     st.metric("Avg ESG Score", f"{avg_esg:.1f}")
-                
+
                 with col12:
                     avg_km = results_df['Km_per_month'].mean()
                     st.metric("Avg Km/Month", f"{avg_km:.0f}")
 
                 col13, col14, col15, col16 = st.columns(4)
-                
+
                 with col13:
                     electric_vehicles = len(results_df[results_df['Engine (Drop Down)'] == 'electric'])
                     electric_pct = (electric_vehicles / total_customers * 100) if total_customers > 0 else 0
                     st.metric("Electric Vehicles", f"{electric_vehicles} ({electric_pct:.1f}%)")
-                
+
                 with col14:
                     urban_customers = len(results_df[results_df['Rural/Urban'] == 'urban'])
                     urban_pct = (urban_customers / total_customers * 100) if total_customers > 0 else 0
                     st.metric("Urban Customers", f"{urban_customers} ({urban_pct:.1f}%)")
-                
+
                 with col15:
                     high_esg = len(results_df[results_df['Crisil_ESG_Score'] >= 80])
                     high_esg_pct = (high_esg / total_customers * 100) if total_customers > 0 else 0
                     st.metric("High ESG (≥80)", f"{high_esg} ({high_esg_pct:.1f}%)")
-                
+
                 with col16:
                     public_transport_users = len(results_df[results_df['Vehicle (Drop Down)'] == 'public_transport'])
                     public_pct = (public_transport_users / total_customers * 100) if total_customers > 0 else 0
@@ -968,22 +1006,23 @@ if test_mode == "CSV Upload":
 
                 st.markdown("### Z-Score Analytics")
                 z_col1, z_col2, z_col3, z_col4 = st.columns(4)
-                
+
                 with z_col1:
                     avg_elec_z = results_df['Electricity_Z'].mean()
                     st.metric("Avg Electricity Z", f"{avg_elec_z:.3f}")
-                
+
                 with z_col2:
                     avg_water_z = results_df['Water_Z'].mean()
                     st.metric("Avg Water Z", f"{avg_water_z:.3f}")
-                
+
                 with z_col3:
                     avg_commute_z = results_df['Commute_Z'].mean()
                     st.metric("Avg Commute Z", f"{avg_commute_z:.3f}")
-                
+
                 with z_col4:
                     avg_company_z = results_df['Company_Z'].mean()
                     st.metric("Avg Company Z", f"{avg_company_z:.3f}")
+
 else:
     st.markdown("### Enter Customer Details")
 # CRISIL ESG - Environmental Scoring Only
@@ -1747,7 +1786,7 @@ else:
                                 color=state_df['Is_Your_State'].map({True: 'red', False: 'blue'}))
                     
                     ax.axhline(y=user_electricity, color='green', linestyle='--', 
-                            label=f'Your Usage ({user_electricity:.1f} kWh, {user_electricity/safe_hh_size:.1f} kWh/person)')
+                            label=f'Your Usage ({user_electricity:.1f} kWh, {individual_equivalent_consumption:.1f} kWh/person)')
                     
                     user_state_avg = state_df[state_df['Is_Your_State']]['Average_Electricity'].values[0] \
                                     if len(state_df[state_df['Is_Your_State']]) > 0 else 0
