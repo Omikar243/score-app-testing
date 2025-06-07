@@ -639,8 +639,6 @@ test_mode = st.radio("Input Mode", ["Manual Entry", "CSV Upload"], key="test_mod
 
 features = ["Electricity", "Water (Monthly or Daily)", "Public_Transport", "Private_Transport", "Industry (Sector_classification)", "Number of Employees"]
 
-test_mode = "CSV Upload"
-
 if test_mode == "CSV Upload":
         st.markdown("### Upload Test Data")
 
