@@ -10,7 +10,7 @@ import json
 from io import BytesIO
 from fpdf import FPDF
 
-# --- Global Configurations and Data Loading Functions (Unchanged from previous version) ---
+# --- Global Configurations and Data Loading Functions ---
 
 st.set_page_config(page_title="Resource Sustainability Dashboard", layout="wide")
 
@@ -76,33 +76,34 @@ def load_company_data():
 
 @st.cache_data
 def load_real_electricity_data():
-    """Load electricity consumption data from file path"""
+    """Load electricity consumption data from the new 'Electricity_Analysis.xlsx' file."""
     try:
-        file_path = "electricity_data.xlsx"
+        file_path = "Electricity_Analysis.xlsx"
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
         else:
-            file_path = "electricity_data_with_mpce_hhsize.csv"
-            if os.path.exists(file_path):
-                df = pd.read_csv(file_path)
-            else:
-                st.error("No electricity data file found. Please make sure electricity_data.csv or electricity_data.xlsx exists.")
-                return None
-
-        needed = ["hhid","hh_size", "state_name", "sector", "qty_usage_in_1month", "mpce"]
-        missing = [c for c in needed if c not in df.columns]
-        if missing:
-            st.error(f"Missing columns in electricity data: {', '.join(missing)}")
+            st.error("No electricity data file found. Please make sure 'Electricity_Analysis.xlsx' exists in the app directory.")
             return None
 
-        # Clean state names if necessary
-        state_name_mapping = {
-             "Delhi (NCT)": "Delhi",
-             "Andaman & Nicobar": "Andaman and Nicobar Islands",
-             "Jammu & Kashmir": "Jammu and Kashmir",
-             "Dadra & Nagar Haveli and Daman & Diu": "Dadra and Nagar Haveli and Daman and Du"
-        }
-        df["state_name"] = df["state_name"].replace(state_name_mapping)
+       
+        needed = ['State/UT', 'Individual Consumption (23-24)', 'HH Size Average (23-24)']
+        missing = [c for c in needed if c not in df.columns]
+        if missing:
+            st.error(f"Missing columns in 'Electricity_Analysis.xlsx': {', '.join(missing)}")
+            return None
+
+        
+        df = df.rename(columns={
+            'State/UT': 'state_name',
+            'Individual Consumption (23-24)': 'qty_usage_in_1month',
+            'HH Size Average (23-24)': 'hh_size'
+        })
+
+        # Ensure data types are correct
+        df['qty_usage_in_1month'] = pd.to_numeric(df['qty_usage_in_1month'], errors='coerce')
+        df['hh_size'] = pd.to_numeric(df['hh_size'], errors='coerce')
+        df.dropna(subset=['state_name', 'qty_usage_in_1month', 'hh_size'], inplace=True)
+
 
         # Further filter for states that are in INDIAN_STATES_UTS
         df = df[df['state_name'].isin(INDIAN_STATES_UTS)].copy()
@@ -113,25 +114,25 @@ def load_real_electricity_data():
         state_stats = {}
         for state in df["state_name"].unique():
             state_df = df[df["state_name"] == state]
-            if len(state_df) > 0:
+            if not state_df.empty:
                 state_stats[state] = {
                     "Electricity": (
                         state_df["qty_usage_in_1month"].mean(),
                         state_df["qty_usage_in_1month"].std()
                     ),
-                    "MPCE": (
-                        state_df["mpce"].mean(),
-                        state_df["mpce"].std()
+                    "HH_Size": (
+                        state_df["hh_size"].mean(),
+                        state_df["hh_size"].std()
                     )
                 }
         st.session_state.baseline_values_by_state = state_stats
         return df
 
     except Exception as e:
-        st.error(f"Error loading electricity data: {str(e)}")
+        st.error(f"Error loading or processing 'Electricity_Analysis.xlsx': {str(e)}")
         return None
 
-# Initialize session state variables if they don't exist
+
 if 'company_data' not in st.session_state:
     st.session_state.company_data = load_company_data()
 if 'electricity_data' not in st.session_state:
@@ -139,7 +140,6 @@ if 'electricity_data' not in st.session_state:
     if st.session_state.electricity_data is not None:
         st.session_state.full_electricity_data = st.session_state.electricity_data # Store for overall stats
 
-# Default weights (moved from original weighted score settings section)
 if 'weights' not in st.session_state:
     st.session_state.weights = {
         "Electricity_State": 0.125,
@@ -157,19 +157,12 @@ if 'sub_weights' not in st.session_state:
         "company": {"company": 0.25}
     }
 
-# Initialize other session state variables that hold user inputs or calculated results
 if 'scored_data' not in st.session_state:
     st.session_state.scored_data = pd.DataFrame()
 if 'user_electricity' not in st.session_state:
     st.session_state.user_electricity = 0.0
 if 'user_state' not in st.session_state:
     st.session_state.user_state = INDIAN_STATES_UTS[0]
-if 'user_sector_name' not in st.session_state:
-    st.session_state.user_sector_name = 'Rural'
-if 'user_mpce_range' not in st.session_state:
-    st.session_state.user_mpce_range = (0, 1000) # Default to first range
-if 'user_mpce_range_name' not in st.session_state:
-    st.session_state.user_mpce_range_name = "₹1-1,000"
 if 'household_size' not in st.session_state:
     st.session_state.household_size = 1
 if 'water_units' not in st.session_state:
@@ -181,11 +174,11 @@ if 'calculated_single_customer_score' not in st.session_state:
 if 'calculated_single_customer_zscore' not in st.session_state:
     st.session_state.calculated_single_customer_zscore = None
 if 'crisil_esg_score_input' not in st.session_state:
-    st.session_state.crisil_esg_score_input = 0.0 # Initialize Crisil ESG score
+    st.session_state.crisil_esg_score_input = 0.0 
 if 'selected_company_for_comparison' not in st.session_state:
     st.session_state.selected_company_for_comparison = None
 if 'custom_esg_score_for_comparison' not in st.session_state:
-    st.session_state.custom_esg_score_for_comparison = 50.0 # Default value
+    st.session_state.custom_esg_score_for_comparison = 50.0 
 if 'esg_comparison_method' not in st.session_state:
     st.session_state.esg_comparison_method = "Select from list"
 if 'esg_analysis_type' not in st.session_state:
@@ -194,17 +187,16 @@ if 'selected_esg_industry' not in st.session_state:
     st.session_state.selected_esg_industry = None
 if 'selected_esg_emp_size' not in st.session_state:
     st.session_state.selected_esg_emp_size = "Small (<5,000)"
-if 'calculated' not in st.session_state: # For transport carbon footprint section
+if 'calculated' not in st.session_state: 
     st.session_state.calculated = False
-if 'total_emissions' not in st.session_state: # For transport carbon footprint section
+if 'total_emissions' not in st.session_state: 
     st.session_state.total_emissions = 0.0
-if 'emissions_data' not in st.session_state: # For transport carbon footprint section
+if 'emissions_data' not in st.session_state: 
     st.session_state.emissions_data = {}
-if 'recommendations' not in st.session_state: # For transport carbon footprint section
+if 'recommendations' not in st.session_state: 
     st.session_state.recommendations = []
 
 
-# Helper function for Z-score calculation based on overall data distribution
 @st.cache_data
 def calculate_feature_stats(electricity_data):
     if electricity_data is None or electricity_data.empty:
@@ -214,11 +206,9 @@ def calculate_feature_stats(electricity_data):
             'mean': electricity_data['qty_usage_in_1month'].mean(),
             'std':  electricity_data['qty_usage_in_1month'].std()
         }
-        # Add other features if they have baseline distributions for Z-score calc
     }
 st.session_state.feature_stats = calculate_feature_stats(st.session_state.electricity_data)
 
-# Emission factors (moved here for global access, and ensures it's defined before any page uses it)
 emission_factors = {
     "two_wheeler": {
         "Scooter": {"petrol": {"min": 0.03, "max": 0.06}, "diesel": {"min": 0.04, "max": 0.07}, "electric": {"min": 0.01, "max": 0.02}},
@@ -235,7 +225,7 @@ emission_factors = {
         "hybrid": {"petrol": {"base": 0.14, "uplift": 1.05}, "diesel": {"base": 0.16, "uplift": 1.05}, "electric": {"base": 0.07, "uplift": 1.0}}
     },
     "public_transport": {
-        "base_emission": 0.03, # Base emission factor for generic public transport
+        "base_emission": 0.03, 
         "taxi": {
             "small": {"petrol": {"base": 0.12, "uplift": 1.1}, "diesel": {"base": 0.14, "uplift": 1.1}, "cng": {"base": 0.10, "uplift": 1.05}, "electric": {"base": 0.05, "uplift": 1.0}},
             "hatchback": {"petrol": {"base": 0.15, "uplift": 1.1}, "diesel": {"base": 0.17, "uplift": 1.1}, "cng": {"base": 0.12, "uplift": 1.05}, "electric": {"base": 0.06, "uplift": 1.0}},
@@ -296,7 +286,8 @@ def generate_pdf(scored_df, customer_df, recommendations, emissions_data):
     # Convert test_customer to a dictionary
     test_customer_dict = customer_df.iloc[0].to_dict()
 
-    for col in ['Electricity', 'Water', 'Public_Transport', 'Private_Transport', 'Crisil_ESG_Score', 'Sustainability_Score', 'MPCE']:
+    # Removed 'Rural/Urban' and 'MPCE' from PDF generation
+    for col in ['Electricity', 'Water', 'Public_Transport', 'Private_Transport', 'Crisil_ESG_Score', 'Sustainability_Score']:
         if col in test_customer_dict:
             value = test_customer_dict[col]
             if isinstance(value, (int, float)):
@@ -348,7 +339,7 @@ def generate_pdf(scored_df, customer_df, recommendations, emissions_data):
     pdf.ln(5)
 
 
-    return pdf.output(dest='S').encode('latin-1')
+    return pdf.output(dest='S')
 
 # --- Page 1: Test New Customer ---
 def page_test_customer():
@@ -363,21 +354,7 @@ def page_test_customer():
         with col1:
             user_state = st.selectbox("State/UT", options=sorted(INDIAN_STATES_UTS), key="input_state")
             st.session_state.user_state = user_state
-        with col2:
-            user_sector_name = st.radio("Area Type", ['Rural', 'Urban'], key="input_sector")
-            st.session_state.user_sector_name = user_sector_name
-
-        mpce_ranges = ["₹1-1,000", "₹1,000-5,000", "₹5,000-10,000", "₹10,000-25,000", "₹25,000+"]
-        mpce_range_values = [(0, 1000), (1000, 5000), (5000, 10000), (10000, 25000), (25000, float('inf'))]
-        user_mpce_range_index = st.selectbox(
-            "Monthly Per Capita Expenditure (MPCE) Range",
-            options=range(len(mpce_ranges)),
-            format_func=lambda x: mpce_ranges[x],
-            key="input_mpce_range"
-        )
-        st.session_state.user_mpce_range = mpce_range_values[user_mpce_range_index]
-        st.session_state.user_mpce_range_name = mpce_ranges[user_mpce_range_index]
-
+        
         household_size = st.number_input("Number of people in household", min_value=1, value=st.session_state.household_size, step=1, key="input_household_size")
         st.session_state.household_size = household_size
 
@@ -634,7 +611,6 @@ def page_test_customer():
 
         if st.button("Submit Assessment (Proceed to next page for evaluation)"):
             
-            # <<< START: MODIFIED CODE TO CAPTURE ESG SCORE >>>
             final_esg_score = 0.0
             compare_method = st.session_state.get('form_esg_comparison_method')
 
@@ -644,7 +620,6 @@ def page_test_customer():
             elif compare_method == "Select from list":
                 selected_company_name = st.session_state.get('select_company_for_comparison')
 
-                # Case 1: A specific company IS selected from the list.
                 if selected_company_name and selected_company_name != "(None)":
                     company_df = st.session_state.get('company_data')
                     if company_df is not None:
@@ -652,12 +627,10 @@ def page_test_customer():
                         if not company_row.empty:
                             final_esg_score = company_row.iloc[0]['Environment_Score']
                 
-                # Case 2: No specific company is selected, so calculate the average of the filtered list.
                 else:
                     company_df = st.session_state.get('company_data')
                     analysis_type = st.session_state.get('crisil_analysis_type')
 
-                    # This logic only applies if we are filtering by employee range.
                     if company_df is not None and analysis_type == "Employee Range Analysis":
                         selected_industry = st.session_state.get('employee_range_industry')
                         employee_size_cat = st.session_state.get('employee_size_category')
@@ -675,17 +648,13 @@ def page_test_customer():
                             else: # Large
                                 df_to_filter = df_to_filter[df_to_filter['Total_Employees'] > 15000]
 
-                        # Calculate the average score from the filtered DataFrame.
                         if not df_to_filter.empty:
                             average_score = df_to_filter['Environment_Score'].mean()
                             final_esg_score = average_score
-                            # Inform the user that an average score is being used.
                             st.info(f"No specific company was selected. Using the average Environment Score ({average_score:.2f}) of the {len(df_to_filter)} companies in the selected filter as the benchmark.")
 
-            # Update the session state variable that will be saved and used on Page 4
             st.session_state.crisil_esg_score_input = final_esg_score
-            # <<< END: MODIFIED CODE >>>
-
+            
             st.session_state.esg_analysis_type = st.session_state.crisil_analysis_type
             st.session_state.selected_esg_industry = st.session_state.get('employee_range_industry', None)
             st.session_state.selected_esg_emp_size = st.session_state.get('employee_size_category', "Small (<5,000)")
@@ -695,7 +664,7 @@ def page_test_customer():
             if st.session_state.crisil_esg_score_input == 0.0 and st.session_state.user_electricity == 0.0 and st.session_state.water_units == 0.0 and st.session_state.total_monthly_km == 0.0:
                 st.error("Please enter at least one input for Crisil ESG, Electricity, Water, or Transport to submit the assessment.")
             else:
-                st.success("Customer data submitted! You can now navigate to '4. Evaluation Results & Reporting' to see the assessment.")
+                st.success("Customer data submitted! You can now navigate to '3. Evaluation Results & Reporting' to see the assessment.")
 
                 private_monthly_km = 0
                 public_monthly_km = 0
@@ -720,9 +689,6 @@ def page_test_customer():
 
                 st.session_state.single_customer_inputs = {
                     'State': user_state,
-                    'Rural/Urban': user_sector_name,
-                    'MPCE_Range': st.session_state.user_mpce_range_name,
-                    'MPCE_Value': st.session_state.user_mpce_range[1],
                     'People in the household': household_size,
                     'Crisil_ESG_Score': st.session_state.crisil_esg_score_input,
                     'Electricity': user_electricity,
@@ -768,7 +734,7 @@ def page_test_customer():
                 st.session_state.emissions_data = alternatives
 
 
-    else: # CSV Upload mode
+    else: 
         st.markdown("### Upload Test Data for Bulk Evaluation")
 
         st.markdown("#### Download Template")
@@ -822,216 +788,17 @@ def page_test_customer():
             st.session_state.uploaded_bulk_df = test_df
 
             if st.button("Process & Evaluate Bulk Data (Proceed to next page for evaluation)", key="process_batch_btn_page1"):
-                st.success("Bulk data uploaded. Please navigate to '4. Evaluation Results & Reporting' to see the processed results.")
+                st.success("Bulk data uploaded. Please navigate to '3. Evaluation Results & Reporting' to see the processed results.")
                 st.session_state.current_eval_mode = "Bulk CSV Upload"
 
 
-# --- Page 2: Company & Electricity Data Insights ---
-# ... (This function remains unchanged)
-def page_data_comparison():
-    st.header("2. Company & Electricity Data Insights")
-    st.markdown("Explore overall company performance and electricity consumption trends.")
-
-    col_data_insights = st.container()
-
-    with col_data_insights:
-        st.subheader("Company Data Overview")
-        company_data = st.session_state.company_data
-        if company_data is not None:
-            st.success(f"Loaded {len(company_data)} companies")
-            st.dataframe(company_data, use_container_width=True)
-
-            st.markdown("#### Company Environmental Performance Comparison")
-            company_scores = company_data.sort_values("Environment_Score", ascending=False)
-            top_n = min(20, len(company_scores))
-            top_companies = company_scores.head(top_n)
-
-            fig = px.bar(top_companies,
-                        x="Environment_Score", y="Company_Name", title="Top Companies by Environmental Score",
-                        orientation='h', color="Environment_Score", color_continuous_scale="viridis")
-            fig.update_layout(xaxis_title="Environment Score", yaxis_title="Company", yaxis=dict(autorange="reversed"), height=600)
-            st.plotly_chart(fig, use_container_width=True)
-
-            if "Sector_classification" in company_data.columns:
-                sector_avg = company_data.groupby("Sector_classification")["Environment_Score"].agg(['mean', 'count', 'std']).sort_values('mean', ascending=False)
-                fig = px.bar(sector_avg.reset_index(), x='Sector_classification', y='mean', error_y='std',
-                            title="Average Environmental Score by Sector", labels={'Sector_classification': 'Sector', 'mean': 'Average Environment Score'})
-                fig.update_layout(xaxis_tickangle=-45, height=600, showlegend=False)
-                for i in range(len(sector_avg)):
-                    fig.add_annotation(x=sector_avg.index[i], y=sector_avg['mean'][i], text=f"n={int(sector_avg['count'][i])}", showarrow=False, yshift=10)
-                st.plotly_chart(fig, use_container_width=True)
-
-                fig = px.box(company_data, x="Sector_classification", y="Environment_Score",
-                           title="Distribution of Environmental Scores by Sector", color="Sector_classification")
-                fig.update_layout(xaxis_title="Sector", yaxis_title="Environment Score", xaxis_tickangle=45, showlegend=False, height=600)
-                st.plotly_chart(fig)
-
-                if "Total_Employees" in company_data.columns:
-                    fig = px.scatter(company_data, x="Total_Employees", y="Environment_Score", color="Sector_classification",
-                                   title="Environment Score vs Company Size", opacity=0.6)
-                    fig.update_layout(xaxis_title="Number of Employees", yaxis_title="Environment Score", height=600)
-                    st.plotly_chart(fig)
-        else:
-            st.info("Company data not loaded. Please ensure 'employees_2024_25_updated.csv' is in the directory.")
-            template = pd.DataFrame({
-                "Company_Name":["A","B","C"], "Sector_classification":["Tech","Manu","Health"],
-                "Environment_Score":[70,60,80], "ESG_Rating":["A","B","A-"],
-                "Category":["Leader","Average","Leader"], "Total_Employees":[100,200,150]
-            })
-            st.download_button("Download Company Template", data=template.to_csv(index=False).encode('utf-8'),
-                               file_name="company_template.csv", mime="text/csv")
-
-        st.markdown("---")
-        st.subheader("Electricity Consumption Data Analysis")
-        electricity_data = st.session_state.electricity_data
-        if electricity_data is not None:
-            st.success(f"Loaded {len(electricity_data)} electricity records.")
-            states_count = electricity_data['state_name'].nunique()
-            unique_states = sorted(electricity_data['state_name'].unique().tolist())
-            st.success(f"Loaded electricity data across {len(unique_states)} states and union territories")
-
-            state_options = sorted(electricity_data['state_name'].unique().tolist())
-            selected_state = st.selectbox("Select State/UT for detailed view", state_options, key="dashboard_state")
-
-            sector_options = ['Rural', 'Urban']
-            selected_sector_name = st.radio("Select Sector for detailed view", sector_options, key="dashboard_sector")
-            selected_sector = 1 if selected_sector_name == 'Rural' else 2
-
-            filtered_data = electricity_data[
-                (electricity_data['state_name'] == selected_state) &
-                (electricity_data['sector'] == selected_sector)
-            ]
-
-            col_elec1, col_elec2 = st.columns(2)
-            with col_elec1:
-                if not filtered_data.empty:
-                    avg_electricity = filtered_data['qty_usage_in_1month'].mean()
-                    avg_mpce = filtered_data['mpce'].mean()
-                    st.metric("Average Electricity", f"{avg_electricity:.2f} kWh")
-                    st.metric("Average MPCE", f"₹{avg_mpce:.2f}")
-                    if 'hh_size' in filtered_data.columns:
-                        avg_hh_size = filtered_data['hh_size'].mean()
-                        per_capita_electricity = filtered_data['qty_usage_in_1month'] / filtered_data['hh_size']
-                        avg_per_capita_electricity = per_capita_electricity.mean()
-                        st.metric("Average Household Size", f"{avg_hh_size:.1f} people")
-                        st.metric("Per Capita Electricity", f"{avg_per_capita_electricity:.2f} kWh/person")
-                else:
-                    st.warning(f"No data available for {selected_state} ({selected_sector_name})")
-
-            with col_elec2:
-                st.markdown(f"**Electricity Consumption Distribution - {selected_state}, {selected_sector_name}**")
-                if not filtered_data.empty:
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.histplot(filtered_data["qty_usage_in_1month"], bins=30, kde=True, ax=ax)
-                    ax.set_xlabel("Electricity (kWh/month)")
-                    st.pyplot(fig)
-                else:
-                    st.info("No data to display distribution.")
-
-            if not filtered_data.empty and 'hh_size' in filtered_data.columns:
-                st.markdown(f"**Household Size Distribution - {selected_state}, {selected_sector_name}**")
-                fig_hh, ax_hh = plt.subplots(figsize=(10, 6))
-                hh_size_counts = filtered_data['hh_size'].value_counts().sort_index()
-                ax_hh.bar(hh_size_counts.index, hh_size_counts.values, alpha=0.7, edgecolor='black')
-                ax_hh.set_xlabel("Number of People in Household")
-                ax_hh.set_ylabel("Number of Households")
-                st.pyplot(fig_hh)
-
-            st.markdown("#### Overall Electricity Consumption Comparison Across States")
-            sector_for_comparison = st.radio("Select Sector for Comparison", ['Rural', 'Urban', 'Both'], key="comparison_sector")
-
-            if sector_for_comparison == 'Both':
-                state_avg = electricity_data.groupby('state_name')['qty_usage_in_1month'].mean().reset_index()
-                if 'hh_size' in electricity_data.columns:
-                    state_hh_avg = electricity_data.groupby('state_name')['hh_size'].mean().reset_index()
-                    state_avg = state_avg.merge(state_hh_avg, on='state_name')
-                    electricity_data['per_capita_usage'] = electricity_data['qty_usage_in_1month'] / electricity_data['hh_size']
-                    state_per_capita_avg = electricity_data.groupby('state_name')['per_capita_usage'].mean().reset_index()
-                    state_avg = state_avg.merge(state_per_capita_avg, on='state_name')
-                chart_title = "Average Electricity Consumption by State (Rural & Urban)"
-            else:
-                sector_value = 1 if sector_for_comparison == 'Rural' else 2
-                filtered_comparison = electricity_data[electricity_data['sector'] == sector_value]
-                state_avg = filtered_comparison.groupby('state_name')['qty_usage_in_1month'].mean().reset_index()
-                if 'hh_size' in filtered_comparison.columns:
-                    state_hh_avg = filtered_comparison.groupby('state_name')['hh_size'].mean().reset_index()
-                    state_avg = state_avg.merge(state_hh_avg, on='state_name')
-                    filtered_comparison['per_capita_usage'] = filtered_comparison['qty_usage_in_1month'] / filtered_comparison['hh_size']
-                    state_per_capita_avg = filtered_comparison.groupby('state_name')['per_capita_usage'].mean().reset_index()
-                    state_avg = state_avg.merge(state_per_capita_avg, on='state_name')
-                chart_title = f"Average Electricity Consumption by State ({sector_for_comparison})"
-
-            state_avg = state_avg.sort_values('qty_usage_in_1month', ascending=False)
-            fig = px.bar(state_avg, x='state_name', y='qty_usage_in_1month', title=chart_title,
-                         labels={'state_name': 'State/UT', 'qty_usage_in_1month': 'Average Electricity (kWh/month)'})
-            fig.update_layout(xaxis_tickangle=90)
-            fig.update_traces(texttemplate='%{y:.1f}', textposition='outside')
-            st.plotly_chart(fig, use_container_width=True)
-
-            if 'hh_size' in electricity_data.columns:
-                st.markdown("##### Household Size Comparison Across States")
-                hh_tab1, hh_tab2 = st.tabs(["Average Household Size", "Per Capita Electricity"])
-                with hh_tab1:
-                    state_hh_sorted = state_avg.sort_values('hh_size', ascending=False) if 'hh_size' in state_avg.columns else state_avg
-                    fig_hh = px.bar(state_hh_sorted, x='state_name', y='hh_size',
-                                    title=f"Average Household Size by State ({sector_for_comparison})",
-                                    labels={'state_name': 'State/UT', 'hh_size': 'Average Household Size (people)'},
-                                    color='hh_size', color_continuous_scale='Blues')
-                    fig_hh.update_layout(xaxis_tickangle=90)
-                    fig_hh.update_traces(texttemplate='%{y:.1f}', textposition='outside')
-                    st.plotly_chart(fig_hh)
-                with hh_tab2:
-                    if 'per_capita_usage' in state_avg.columns:
-                        state_pc_sorted = state_avg.sort_values('per_capita_usage', ascending=False)
-                        fig_pc = px.bar(state_pc_sorted, x='state_name', y='per_capita_usage',
-                                        title=f"Per Capita Electricity Consumption by State ({sector_for_comparison})",
-                                        labels={'state_name': 'State/UT', 'per_capita_usage': 'Per Capita Electricity (kWh/person/month)'},
-                                        color='per_capita_usage', color_continuous_scale='Viridis')
-                        fig_pc.update_layout(xaxis_tickangle=90)
-                        fig_pc.update_traces(texttemplate='%{y:.2f}', textposition='outside')
-                        st.plotly_chart(fig_pc)
-
-            st.markdown("##### Total Electricity Usage by Sectors and States Across India")
-            sector_state_tab1, sector_state_tab2 = st.tabs(["By Sector", "By State"])
-            with sector_state_tab1:
-                sector_total = electricity_data.groupby('sector')['qty_usage_in_1month'].sum().reset_index()
-                sector_total['sector_name'] = sector_total['sector'].map({1: 'Rural', 2: 'Urban'})
-                fig_pie = px.pie(sector_total, values='qty_usage_in_1month', names='sector_name',
-                                title="Total Electricity Usage Distribution by Sector", hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
-                fig_pie.update_traces(textinfo='percent', textposition='inside')
-                total_usage = sector_total['qty_usage_in_1month'].sum()
-                fig_pie.update_layout(annotations=[dict(text=f'Total<br>{total_usage:.1f} kWh', x=0.5, y=0.5, font_size=14, showarrow=False)])
-                st.plotly_chart(fig_pie)
-            with sector_state_tab2:
-                state_total = electricity_data.groupby('state_name')['qty_usage_in_1month'].sum().reset_index()
-                state_total = state_total.sort_values('qty_usage_in_1month', ascending=False)
-                fig_treemap = px.treemap(state_total, path=['state_name'], values='qty_usage_in_1month',
-                                       title="Total Electricity Usage Distribution by State", color='qty_usage_in_1month',
-                                       color_continuous_scale='Viridis')
-                st.plotly_chart(fig_treemap)
-                fig_bar = px.bar(state_total, y='state_name', x='qty_usage_in_1month', orientation='h',
-                                 title="State-wise Total Electricity Usage", labels={'state_name': 'State/UT', 'qty_usage_in_1month': 'Total Electricity Usage (kWh)'},
-                                 color='qty_usage_in_1month', color_continuous_scale='Viridis')
-                fig_bar.update_traces(texttemplate='%{x:.1f}', textposition='outside')
-                num_states = len(state_total)
-                chart_height = max(500, 20 * num_states)
-                fig_bar.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_title='Total Electricity Usage (kWh)',
-                                      yaxis_title='State/UT', height=chart_height, margin=dict(l=200, r=100, t=50, b=50))
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-        else:
-            st.info("Electricity consumption data not loaded. Please ensure 'electricity_data.xlsx' or 'electricity_data_with_mpce_hhsize.csv' is in the directory.")
-
-# --- Page 3: Weighted Score Settings ---
-# ... (This function remains unchanged)
 def page_evaluation():
     st.header("3. Weighted Score Settings")
     st.markdown("Adjust the importance of different sustainability factors.")
 
     st.markdown("**Electricity Consumption**")
-    w_elec_location = st.number_input("Location Based (e.g., State/UT) Weight", value=st.session_state.weights["Electricity_State"], step=0.01, format="%.3f", key="wt_elec_location")
-    w_elec_mpce = st.number_input("Economic Based (MPCE) Weight", value=st.session_state.weights["Electricity_MPCE"], step=0.01, format="%.3f", key="wt_elec_mpce")
-    st.markdown(f"*(Current Total Electricity Weight: {w_elec_location + w_elec_mpce:.3f}, Target: 0.25)*")
+    w_elec_total = st.number_input("Electricity Weight", value=st.session_state.weights["Electricity_State"] + st.session_state.weights["Electricity_MPCE"], step=0.01, format="%.3f", key="wt_elec_total")
+    st.markdown(f"*(Current Total Electricity Weight: {w_elec_total:.3f}, Target: 0.25)*")
 
     st.markdown("**Water Consumption**")
     w_water = st.number_input("Water Weight", value=st.session_state.weights["Water"], step=0.01, format="%.3f", key="wt_water")
@@ -1047,8 +814,8 @@ def page_evaluation():
     st.markdown(f"*(Current Total Company Weight: {w_company:.3f}, Target: 0.25)*")
 
     current_weights = {
-        "Electricity_State": w_elec_location,
-        "Electricity_MPCE": w_elec_mpce,
+        "Electricity_State": w_elec_total / 2, 
+        "Electricity_MPCE": w_elec_total / 2,
         "Water": w_water,
         "Public_Transport": w_public,
         "Private_Transport": w_private,
@@ -1063,62 +830,48 @@ def page_evaluation():
         if st.button("Apply Weighted Score Settings"):
             st.session_state.weights = current_weights
             st.session_state.sub_weights = {
-                "electricity": {"location": w_elec_location, "mpce": w_elec_mpce},
+                "electricity": {"total": w_elec_total}, 
                 "commute": {"public": w_public, "private": w_private},
                 "water": {"water": w_water},
                 "company": {"company": w_company}
             }
             st.success("Weighted score settings applied successfully!")
 
-# --- Page 4: Evaluation Results & Reporting ---
-# ... (This function remains unchanged)
 def page_reporting():
-    st.header("4. Evaluation Results & Reporting")
+    st.header("3. Evaluation Results & Reporting")
     st.markdown("View detailed sustainability assessment for individual customers or process bulk data, and generate reports.")
     
-    # Define MPCE ranges and values at the start of the function
-    mpce_ranges = ["₹1-1,000", "₹1,000-5,000", "₹5,000-10,000", "₹10,000-25,000", "₹25,000+"]
-    mpce_range_values = [(0, 1000), (1000, 5000), (5000, 10000), (10000, 25000), (25000, float('inf'))]
-  # Determine which mode to display results for
-    evaluation_mode_display = st.session_state.get('current_eval_mode', 'Individual Customer Evaluation') # Default
+    evaluation_mode_display = st.session_state.get('current_eval_mode', 'Individual Customer Evaluation') 
 
     if evaluation_mode_display == "Individual Customer Evaluation":
         st.subheader("Individual Customer Assessment Results")
 
-        # <<< START: MODIFIED MULTILEVEL DONUT CHART >>>
         st.markdown("#### Weighted Score Contributions")
         st.markdown("This chart shows the weighting of each factor in the total sustainability score, as configured on Page 3.")
 
-        # Get weights from session state
         weights = st.session_state.weights
 
-        # Data for the multi-level donut chart
         labels = [
             "Electricity", "Water", "Commute", "Company",
-            "Location Based", "Economic Based", "Public Transport", "Private Transport"
+            "Public Transport", "Private Transport"
         ]
         parents = [
             "", "", "", "",
-            "Electricity", "Electricity", "Commute", "Commute"
+            "Commute", "Commute"
         ]
 
-        # Calculate parent values from their children
         electricity_total = weights["Electricity_State"] + weights["Electricity_MPCE"]
         commute_total = weights["Public_Transport"] + weights["Private_Transport"]
 
-        # The values for all nodes including calculated parent values
         values = [
-            electricity_total,  # Electricity parent (sum of children)
+            electricity_total,
             weights["Water"],
-            commute_total,      # Commute parent (sum of children)
+            commute_total,
             weights["Company"],
-            weights["Electricity_State"],
-            weights["Electricity_MPCE"],
             weights["Public_Transport"],
             weights["Private_Transport"]
         ]
 
-        # Check if all weight values are zero to avoid errors
         if sum(weights.values()) == 0:
             st.warning("All weight values are zero. The chart cannot be displayed until weights are set on Page 3.")
         else:
@@ -1130,10 +883,9 @@ def page_reporting():
                     branchvalues="total",
                     hovertemplate='<b>%{label}</b><br>Weight: %{value:.3f}<extra></extra>',
                     insidetextorientation='radial',
-                    maxdepth=2,  # Limit depth for better visualization
+                    maxdepth=2,
                 ))
 
-                # Update layout for better visibility
                 fig.update_layout(
                     margin=dict(t=60, l=20, r=20, b=20),
                     title_text="Weight Distribution for Sustainability Score",
@@ -1148,7 +900,6 @@ def page_reporting():
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"An error occurred while creating the chart: {e}")
-                # <<< END: MODIFIED MULTILEVEL DONUT CHART >>>
 
         if 'single_customer_inputs' not in st.session_state or not st.session_state.single_customer_inputs:
             st.info("Please go to '1. New Customer Assessment' page and submit customer details (Manual Entry mode) first.")
@@ -1156,51 +907,23 @@ def page_reporting():
 
         customer_data = st.session_state.single_customer_inputs
 
-        # Re-calculate values based on stored session state values for display consistency
-        # These calculations must use the values retrieved from session state, not the input widgets from Page 1.
         user_electricity = customer_data['Electricity']
         household_size = customer_data['People in the household']
         user_state = customer_data['State']
-        user_sector_name = customer_data['Rural/Urban']
-        user_sector = 1 if user_sector_name == 'Rural' else 2
-        user_mpce_range_name = customer_data['MPCE_Range']
-        user_mpce_value = customer_data['MPCE_Value'] # Using upper bound for calculation
         crisil_esg = customer_data['Crisil_ESG_Score']
         monthly_water_total = customer_data['Water_Monthly_Total']
         per_person_monthly_water = customer_data['Water_Per_Person_Monthly']
-        total_monthly_km_disp = customer_data['Km_per_month'] # Renamed to avoid conflict with `total_monthly_km` from input form
-        emission_factor_disp = customer_data['Transport_Emission_Factor'] # Renamed to avoid conflict with `emission_factor_calc`
-        people_count_disp = customer_data['Transport_People_Count'] # Renamed to avoid conflict with `people_count_calc`
-        vehicle_name_disp = customer_data['Vehicle_Name'] # Renamed to avoid conflict with `vehicle_name_calc`
-        user_cost = customer_data['Electricity_Cost'] # Ensure user_cost is available
-        mpce_ranges = ["₹1-1,000", "₹1,000-5,000", "₹5,000-10,000", "₹10,000-25,000", "₹25,000+"]
-        user_mpce_range_index = next((i for i, r_name in enumerate(mpce_ranges) if r_name == user_mpce_range_name), 0)
+        total_monthly_km_disp = customer_data['Km_per_month']
+        emission_factor_disp = customer_data['Transport_Emission_Factor']
+        people_count_disp = customer_data['Transport_People_Count']
+        vehicle_name_disp = customer_data['Vehicle_Name']
+        user_cost = customer_data['Electricity_Cost']
 
 
-        # Core calculations (replicated from original script)
         safe_hh_size = household_size if household_size > 0 else 1
-
-        # Calculate equivalence scale factor based on household size
-        if safe_hh_size == 1:
-            equivalence_factor = 1
-        elif safe_hh_size == 2:
-            equivalence_factor = 1.75
-        elif safe_hh_size == 3:
-            equivalence_factor = 2.5
-        elif safe_hh_size == 4:
-            equivalence_factor = 3.25
-        else:
-            # For 5+ people: equivalence_factor = household_size - 1
-            equivalence_factor = safe_hh_size - 1
-
+        equivalence_factor = safe_hh_size
         individual_equivalent_consumption = user_electricity / equivalence_factor if equivalence_factor > 0 else 0
 
-        # --- FIX 1: Electricity Z-score based on individual_equivalent_consumption ---
-        # --- UNIFIED SUSTAINABILITY SCORE CALCULATION ---
-        # This logic replicates the calculation from the "Customer Score Results" section
-        # to ensure the "Individual Sustainability Score" is consistent.
-
-        # 1. Define the customer data dictionary used in the calculation
         temp_new_customer = {
             'Water': per_person_monthly_water,
             'Electricity': individual_equivalent_consumption,
@@ -1209,41 +932,22 @@ def page_reporting():
             'Company Score': crisil_esg
         }
 
-        # 2. Calculate the component scores with hardcoded weights and baselines
         total_z_score = 0
-
-        # Water component (25% weight)
-        # Compares against a baseline of 3900L/person/month
         water_z = (temp_new_customer['Water'] - 3900) / 3900
         total_z_score += water_z * 0.25
-
-        # Electricity component (25% weight)
-        # Compares against a baseline of 300 kWh for individual equivalent usage
-        electricity_z = max(0, (individual_equivalent_consumption - 300) / 300)
+        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)
         total_z_score += electricity_z * 0.25
-
-        # Private transport component (25% weight)
-        # Normalizes based on 1000 km/month
         private_transport_z = temp_new_customer.get('Private_Transport', 0) / 1000
         total_z_score += private_transport_z * 0.25
-
-        # Public transport component (15% weight, gives a bonus for usage)
         public_transport_z = -min(1, temp_new_customer.get('Public_Transport', 0) / 500)
         total_z_score += public_transport_z * 0.15
-
-        # Company score component (10% weight, gives a bonus for higher scores)
         company_z = -(temp_new_customer.get('Company Score', 0) / 100)
         total_z_score += company_z * 0.10
-
-        # 3. Calculate the final sustainability score
         sustainability_score = 500 * (1 - np.tanh(total_z_score / 2.5))
-        # --- END OF UNIFIED CALCULATION ---
-
 
         st.session_state.calculated_single_customer_score = sustainability_score
         st.session_state.calculated_single_customer_zscore = total_z_score
 
-        # Display results for individual customer
         st.markdown("#### Individual Sustainability Score")
         col_res1, col_res2, col_res3 = st.columns(3)
         with col_res1:
@@ -1267,30 +971,29 @@ def page_reporting():
 
         st.markdown("#### Your Electricity Consumption Analysis")
         if st.session_state.electricity_data is not None:
-            state_sector_data_filtered = st.session_state.electricity_data[
-                (st.session_state.electricity_data['state_name'] == user_state) &
-                (st.session_state.electricity_data['sector'] == user_sector)
-            ]
+            electricity_data = st.session_state.electricity_data
+            state_electricity_data = electricity_data[electricity_data['state_name'] == user_state]
 
-            if not state_sector_data_filtered.empty:
-                state_avg_elec = state_sector_data_filtered['qty_usage_in_1month'].mean()
-                st.metric(f"Your Monthly Electricity Usage ({user_state}, {user_sector_name})", f"{user_electricity:.2f} kWh")
-                st.metric(f"Average Monthly Electricity Usage ({user_state}, {user_sector_name})", f"{state_avg_elec:.2f} kWh")
+            if not state_electricity_data.empty:
+                state_avg_elec = state_electricity_data['qty_usage_in_1month'].iloc[0] # Get the average for the state
+                st.metric(f"Your Monthly Individual Electricity Usage ({user_state})", f"{individual_equivalent_consumption:.2f} kWh")
+                st.metric(f"Average Monthly Individual Electricity Usage ({user_state})", f"{state_avg_elec:.2f} kWh")
 
                 fig, ax = plt.subplots(figsize=(10, 6))
-                sns.histplot(state_sector_data_filtered['qty_usage_in_1month'], bins=15, kde=True, ax=ax)
-                ax.axvline(user_electricity, color='red', linestyle='--', label='Your Usage')
+                
+                # Plotting distribution of averages from all states for context
+                sns.histplot(electricity_data['qty_usage_in_1month'], bins=15, kde=True, ax=ax, label="Distribution of State Averages")
+                ax.axvline(individual_equivalent_consumption, color='red', linestyle='--', label='Your Usage')
                 ax.axvline(state_avg_elec, color='green', linestyle='--', label=f'{user_state} Average')
-                ax.set_title(f"Your Electricity Usage Compared to {user_state}, {user_sector_name}")
-                ax.set_xlabel("Monthly Consumption (kWh)")
+                ax.set_title(f"Your Individual Electricity Usage Compared to {user_state} Average")
+                ax.set_xlabel("Monthly Individual Consumption (kWh)")
                 ax.legend()
                 st.pyplot(fig)
             else:
-                st.warning(f"No specific electricity data available for {user_state} ({user_sector_name}) to compare.")
+                st.warning(f"No specific electricity data available for {user_state} to compare.")
         else:
             st.info("Electricity data not loaded for comparison.")
 
-        # --- START NEWLY ADDED CODE (Electricity Section) ---
         if user_electricity > 0:
             st.markdown("#### Individual Electricity Consumption")
             ind_col1, ind_col2 = st.columns(2)
@@ -1302,67 +1005,39 @@ def page_reporting():
                 st.metric("Individual Equivalent Usage", f"{individual_equivalent_consumption:.1f} kWh",
                                 f"Based on {household_size} people")
 
-            electricity_data = st.session_state.electricity_data # Ensure local variable is set
+            electricity_data = st.session_state.electricity_data if 'electricity_data' in st.session_state else None
             if electricity_data is not None and 'hh_size' in electricity_data.columns:
-                state_sector_hh_data = electricity_data[
-                    (electricity_data['state_name'] == user_state) & 
-                    (electricity_data['sector'] == user_sector)
-                ]
+                state_hh_data = electricity_data[electricity_data['state_name'] == user_state]
                 
-                if not state_sector_hh_data.empty:
-                    state_hh_avg = state_sector_hh_data['hh_size'].mean()
-                    state_hh_median = state_sector_hh_data['hh_size'].median()
+                if not state_hh_data.empty:
+                    state_hh_avg = state_hh_data['hh_size'].iloc[0]
                     
                     st.markdown("#### Household Size Comparison")
-                    hh_col1, hh_col2, hh_col3 = st.columns(3)
+                    hh_col1, hh_col2 = st.columns(2)
                     
                     with hh_col1:
                         st.metric("Your Household Size", f"{household_size} people")
                     
                     with hh_col2:
                         comparison = "larger" if household_size > state_hh_avg else "smaller" if household_size < state_hh_avg else "same as"
-                        st.metric(f"{user_state} ({user_sector_name}) Average", 
+                        st.metric(f"Average HH Size in {user_state}", 
                                     f"{state_hh_avg:.1f} people",
                                     f"Your household is {comparison} average")
                     
-                    with hh_col3:
-                        percentile_hh = (state_sector_hh_data['hh_size'] <= household_size).mean() * 100
-                        st.metric("Your Percentile", 
-                                    f"{percentile_hh:.1f}%",
-                                    f"Larger than {percentile_hh:.1f}% of households")
-                    
-                    fig_hh, ax_hh = plt.subplots(figsize=(10, 6))
-                    
-                    sns.histplot(data=state_sector_hh_data, x='hh_size', bins=range(1, int(state_sector_hh_data['hh_size'].max()) + 2), 
-                                kde=True, ax=ax_hh, alpha=0.7)
-                    
-                    ax_hh.axvline(household_size, color='red', linestyle='-', linewidth=2, label=f'Your Household ({household_size} people)')
-                    ax_hh.axvline(state_hh_avg, color='green', linestyle='--', linewidth=2, label=f'State Average ({state_hh_avg:.1f} people)')
-                    ax_hh.axvline(state_hh_median, color='orange', linestyle='--', linewidth=2, label=f'State Median ({state_hh_median:.1f} people)')
-                    
-                    ax_hh.set_title(f"Household Size Distribution in {user_state} ({user_sector_name})")
-                    ax_hh.set_xlabel("Household Size (Number of People)")
-                    ax_hh.set_ylabel("Frequency")
-                    ax_hh.legend()
-                    ax_hh.grid(True, alpha=0.3)
-                    
-                    st.pyplot(fig_hh)
-                    
-                    st.markdown("#### Household Size Comparison Across States")
-                    state_hh_comparison = electricity_data.groupby('state_name')['hh_size'].agg(['mean', 'median']).reset_index()
-                    state_hh_comparison = state_hh_comparison.sort_values('mean')
-                    state_hh_comparison['is_user_state'] = state_hh_comparison['state_name'] == user_state
                     fig_states, ax_states = plt.subplots(figsize=(14, 8))
                     
+                    state_hh_comparison = electricity_data.groupby('state_name')['hh_size'].mean().reset_index().sort_values('hh_size')
+                    state_hh_comparison['is_user_state'] = state_hh_comparison['state_name'] == user_state
+
                     bars = ax_states.bar(state_hh_comparison['state_name'], 
-                                        state_hh_comparison['mean'],
+                                        state_hh_comparison['hh_size'],
                                         color=state_hh_comparison['is_user_state'].map({True: 'red', False: 'skyblue'}),
                                         alpha=0.8)
                     
                     ax_states.axhline(y=household_size, color='green', linestyle='--', linewidth=2,
                                     label=f'Your Household Size ({household_size} people)')
                     
-                    user_state_avg_hh = state_hh_comparison[state_hh_comparison['is_user_state']]['mean'].values[0]
+                    user_state_avg_hh = state_hh_comparison[state_hh_comparison['is_user_state']]['hh_size'].values[0]
                     ax_states.scatter(user_state, user_state_avg_hh, s=150, color='darkred', zorder=5,
                                     label=f'{user_state} Average ({user_state_avg_hh:.1f} people)')
                     
@@ -1376,298 +1051,31 @@ def page_reporting():
                     
                     st.pyplot(fig_states)
                     
-                    if len(electricity_data['sector'].unique()) > 1:
-                        st.markdown("#### Rural vs Urban Household Size Comparison")
-                        
-                        sector_hh_comparison = electricity_data.groupby(['state_name', 'sector'])['hh_size'].mean().reset_index()
-                        sector_hh_comparison['sector_name'] = sector_hh_comparison['sector'].map({1: 'Rural', 2: 'Urban'})
-                        
-                        user_state_sectors = sector_hh_comparison[sector_hh_comparison['state_name'] == user_state]
-                        
-                        if not user_state_sectors.empty:
-                            fig_sector, ax_sector = plt.subplots(figsize=(8, 6))
-                            
-                            bars_sector = ax_sector.bar(user_state_sectors['sector_name'], 
-                                                        user_state_sectors['hh_size'],
-                                                        color=['lightcoral' if s == user_sector_name else 'lightblue' 
-                                                                for s in user_state_sectors['sector_name']],
-                                                        alpha=0.8)
-                            
-                            ax_sector.axhline(y=household_size, color='green', linestyle='--', linewidth=2,
-                                            label=f'Your Household Size ({household_size} people)')
-                            
-                            user_sector_avg = user_state_sectors[user_state_sectors['sector_name'] == user_sector_name]['hh_size'].values
-                            if len(user_sector_avg) > 0:
-                                ax_sector.scatter(user_sector_name, user_sector_avg[0], s=150, color='darkred', zorder=5,
-                                                label=f'Your Sector Average ({user_sector_avg[0]:.1f} people)')
-                            
-                            ax_sector.set_title(f'Household Size Comparison: Rural vs Urban in {user_state}')
-                            ax_sector.set_xlabel('Sector')
-                            ax_sector.set_ylabel('Average Household Size (People)')
-                            ax_sector.legend()
-                            ax_sector.grid(True, alpha=0.3)
-                            
-                            st.pyplot(fig_sector)
-                        else:
-                            st.info(f"No household size data available for {user_state} ({user_sector_name})")
             else:
                 st.info("Household size data not available in the dataset for comparison")
 
-            if user_electricity > 0:
-                st.metric("Your Electricity Consumption", f"{user_electricity:.2f} kWh")
+            if user_cost > 0:
+                def calculate_electricity_from_cost(cost, household_size_arg):
+                    divisor = household_size_arg
+                    return cost / divisor
                 
-                if household_size and household_size > 0:
-                    st.metric("Per Person Electricity Consumption", f"{individual_equivalent_consumption:.2f} kWh/person")
-                else:
-                    st.metric("Per Person Electricity Consumption", "N/A (household size not specified)")
+                safe_hh_size_calc = household_size if household_size and household_size > 0 else 1
+                calculated_electricity_from_cost = calculate_electricity_from_cost(user_cost, safe_hh_size_calc)
                 
-                if user_cost > 0:
-                    def calculate_electricity_from_cost(cost, household_size_arg):
-                        if household_size_arg == 1:
-                            return cost / 1
-                        elif household_size_arg == 2:
-                            return cost / 1.75
-                        elif household_size_arg == 3:
-                            return cost / 2.5
-                        elif household_size_arg == 4:
-                            return cost / 3.25
-                        else:  # 5 or more people
-                            return cost / (household_size_arg - 1)
-                    
-                    # Auto-calculate user_electricity based on cost and household size
-                    safe_hh_size_calc = household_size if household_size and household_size > 0 else 1
-                    # Note: user_electricity is already passed as a variable at the top of the function
-                    # For this specific block, we'll re-calculate if user_cost > 0 for display purposes.
-                    calculated_electricity_from_cost = calculate_electricity_from_cost(user_cost, safe_hh_size_calc)
-                    
-                    # Display cost-based calculation metrics
-                    st.markdown("### Cost-Based Electricity Usage Calculation")
-                    
-                    if safe_hh_size_calc == 1:
-                        divisor = 1
-                    elif safe_hh_size_calc == 2:
-                        divisor = 1.75
-                    elif safe_hh_size_calc == 3:
-                        divisor = 2.5
-                    elif safe_hh_size_calc == 4:
-                        divisor = 3.25
-                    else:  # 5 or more people
-                        divisor = safe_hh_size_calc - 1
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Monthly Cost", f"₹{user_cost:.2f}")
-                    with col2:
-                        st.metric("Household Size", f"{safe_hh_size_calc} people")
-                    with col3:
-                        st.metric("Individual Cost", f"{calculated_electricity_from_cost:.2f} ₹")
+                st.markdown("### Cost-Based Electricity Usage Calculation")
+                
+                divisor = safe_hh_size_calc
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Monthly Cost", f"₹{user_cost:.2f}")
+                with col2:
+                    st.metric("Household Size", f"{safe_hh_size_calc} people")
+                with col3:
+                    st.metric("Individual Cost", f"{calculated_electricity_from_cost:.2f} ₹")
         
-        electricity_data = st.session_state.electricity_data # Ensure local variable is set
-        if electricity_data is not None:
-            state_sector_data = electricity_data[
-                (electricity_data['state_name'] == user_state) & 
-                (electricity_data['sector'] == user_sector)
-            ]
-            
-            if not state_sector_data.empty:
-                state_avg = state_sector_data['qty_usage_in_1month'].mean()
-                
-                if 'hh_size' in state_sector_data.columns:
-                    state_avg_per_person = state_sector_data.apply(
-                        lambda x: x['qty_usage_in_1month'] / x['hh_size'] if x['hh_size'] > 0 else x['qty_usage_in_1month'],
-                        axis=1
-                    ).mean()
-                else:
-                    state_avg_per_person = state_avg
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                sns.histplot(state_sector_data['qty_usage_in_1month'], bins=15, kde=True, ax=ax)
-                ax.axvline(user_electricity, color='red', linestyle='--', label='Your Usage')
-                ax.axvline(state_avg, color='green', linestyle='--', label=f'{user_state} Average')
-                ax.set_title(f"Your Electricity Usage Compared to {user_state}, {user_sector_name}")
-                ax.set_xlabel("Monthly Consumption (kWh)")
-                ax.legend()
-                st.pyplot(fig)
-            else:
-                st.warning(f"No data available for {user_state} ({user_sector_name}). Showing overall statistics instead.")
-        
-        if 'full_electricity_data' in st.session_state:
-            overall_avg = st.session_state.full_electricity_data['qty_usage_in_1month'].mean()
-            st.markdown(f"Overall average electricity consumption: **{overall_avg:.2f} kWh**")
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.histplot(st.session_state.full_electricity_data['qty_usage_in_1month'], 
-                            bins=15, kde=True, ax=ax)
-            ax.axvline(user_electricity, color='red', linestyle='--', label='Your Usage')
-            ax.axvline(overall_avg, color='green', linestyle='--', label='Overall Average')
-            ax.set_title("Your Electricity Usage Compared to Overall Average")
-            ax.set_xlabel("Monthly Consumption (kWh)")
-            ax.legend()
-            st.pyplot(fig)
-
-
-
-        st.session_state.feature_stats = {
-            'Electricity': {
-                'mean': st.session_state.full_electricity_data['qty_usage_in_1month'].mean(),
-                'std':  st.session_state.full_electricity_data['qty_usage_in_1month'].std()
-            }
-        }
-
-
-
-             # Initialize baseline values if not present
-        if 'baseline_values_by_state' not in st.session_state:
-            st.session_state.baseline_values_by_state = {}
-        
-        if 'feature_stats' in st.session_state and 'Electricity' in st.session_state.feature_stats:
-            # Removed feature1_score and feature1_z_score calculations that were based on Electricity_State
-            # as per instruction 1.
-            
-            # Removed feature2_score and feature2_z_score calculations that were based on Electricity_MPCE
-            # as per instruction 1.
-            
-            # Removed total_sust_score, combined_z_score, and percentile metrics that were based on 
-            # feature1_score and feature2_score, as per instruction 1, as they are redundant with the
-            # main sustainability score calculation at the top of page_evaluation.
-            
-            # Removed "Your Sustainability Analysis" section with the 3 columns and feature breakdown bar chart
-            # as it was based on the old electricity Z-score breakdown.
-
-            # Create stats per state from electricity data
-            state_stats = {}
-            if 'full_electricity_data' in st.session_state:
-                for state in st.session_state.full_electricity_data['state_name'].unique():
-                    state_data = st.session_state.full_electricity_data[
-                        st.session_state.full_electricity_data['state_name'] == state
-                    ]
-                    state_stats[state] = {
-                        'Electricity': (
-                            state_data['qty_usage_in_1month'].mean(),
-                            state_data['qty_usage_in_1month'].std()
-                        )
-                    }
-
-                st.session_state.feature_stats_by_state = {
-                    state: {
-                        'Electricity': {
-                            'mean': vals['Electricity'][0],
-                            'std':  vals['Electricity'][1]
-                        }
-                    }
-                    for state, vals in state_stats.items()
-                }
-
-
-            if 'feature_stats_by_state' in st.session_state:
-                st.markdown("### Your Usage Compared to State Averages")
-                state_data = []
-                for state, stats in st.session_state.feature_stats_by_state.items():
-                    if 'Electricity' in stats:
-                        state_data.append({
-                            'State_UT': state,
-                            'Average_Electricity': stats['Electricity']['mean'],
-                            'Is_Your_State': state == user_state
-                        })
-                
-                state_df = pd.DataFrame(state_data)
-                state_df = state_df.sort_values('Average_Electricity', ascending=True)
-                if state_df.empty:
-                    st.warning("No electricity data available for comparison")
-                
-                
-                fig, ax = plt.subplots(figsize=(12, 8))
-                bars = ax.bar(state_df['State_UT'], state_df['Average_Electricity'], 
-                                color=state_df['Is_Your_State'].map({True: 'red', False: 'blue'}))
-                
-                ax.axhline(y=user_electricity, color='green', linestyle='--', 
-                                label=f'Your Usage ({user_electricity:.1f} kWh, {individual_equivalent_consumption:.1f} kWh/person)')
-                
-                user_state_avg = state_df[state_df['Is_Your_State']]['Average_Electricity'].values[0] \
-                                    if len(state_df[state_df['Is_Your_State']]) > 0 else 0
-                if user_state_avg > 0:
-                    ax.scatter(user_state, user_state_avg, s=100, color='red', zorder=3,
-                                    label=f'{user_state} Avg ({user_state_avg:.1f} kWh)')
-                
-                plt.xticks(rotation=90)
-                plt.xlabel('State/UT')
-                plt.ylabel('Average Electricity Consumption (kWh)')
-                plt.title('Your Electricity Usage vs. State Averages')
-                plt.legend()
-                plt.tight_layout()
-                
-                st.pyplot(fig)
-            
-
-            # after you compute baseline mpce_stats_by_range, e.g. in load_data():
-            # Calculate baseline MPCE stats from electricity data if available
-            baseline_mpce_stats = {}
-            if 'full_electricity_data' in st.session_state and 'mpce' in st.session_state.full_electricity_data.columns:
-                for i, (lower, upper) in enumerate(mpce_range_values):
-                    range_data = st.session_state.full_electricity_data[
-                        (st.session_state.full_electricity_data['mpce'] >= lower) & 
-                        (st.session_state.full_electricity_data['mpce'] < upper)
-                    ]
-                    if not range_data.empty:
-                        baseline_mpce_stats[mpce_ranges[i]] = (
-                            range_data['qty_usage_in_1month'].mean(),
-                            range_data['qty_usage_in_1month'].std()
-                        )
-                    else:
-                        # Use overall stats as fallback if no data for this range
-                        baseline_mpce_stats[mpce_ranges[i]] = (
-                            st.session_state.feature_stats['Electricity']['mean'],
-                            st.session_state.feature_stats['Electricity']['std']
-                        )
-            
-            st.session_state.mpce_stats = {
-                idx: {
-                    'range_name': range_name,
-                    'mean': stats[0],
-                    'std': stats[1]
-                }
-                for idx, (range_name, stats) in enumerate(baseline_mpce_stats.items())
-            }
-
-
-            if 'mpce_stats' in st.session_state:
-                st.markdown("### Your Usage Compared to MPCE Ranges")
-                
-                mpce_data = []
-                for idx, stats in st.session_state.mpce_stats.items():
-                    mpce_data.append({
-                        'MPCE_Range': stats['range_name'],
-                        'Average_Electricity': stats['mean'], # Use mean directly from stats, no need to multiply by safe_hh_size
-                        'Is_Your_Range': idx == user_mpce_range_index
-                    })
-                
-                mpce_df = pd.DataFrame(mpce_data)
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                bars = ax.bar(mpce_df.index, mpce_df['Average_Electricity'], 
-                                color=mpce_df['Is_Your_Range'].map({True: 'red', False: 'blue'}))
-                
-                ax.axhline(y=user_electricity, color='green', linestyle='--', 
-                                label=f'Your Usage ({user_electricity:.1f} kWh, {individual_equivalent_consumption:.1f} kWh/person)')
-                
-                user_mpce_avg = mpce_df[mpce_df['Is_Your_Range']]['Average_Electricity'].values[0] \
-                                    if len(mpce_df[mpce_df['Is_Your_Range']]) > 0 else 0
-                if user_mpce_avg > 0 and 'user_mpce_range_name' in st.session_state:
-                    ax.scatter(st.session_state.user_mpce_range_name, user_mpce_avg, s=100, color='red', zorder=3,
-                                    label=f'Your MPCE Range Avg ({user_mpce_avg:.1f} kWh)')
-                
-                plt.xticks(mpce_df.index, mpce_df['MPCE_Range'], rotation=45) # Set ticks to range names
-                plt.xlabel('MPCE Range')
-                plt.ylabel('Average Electricity Consumption (kWh)')
-                plt.title('Your Electricity Usage vs. MPCE Range Averages')
-                plt.legend()
-                plt.tight_layout()
-                
-                st.pyplot(fig)
-        # --- END NEWLY ADDED CODE (Electricity Section) ---
-
         st.markdown("#### Your Water Consumption Analysis")
-        avg_water_liters_per_person = 130 # liters per day
+        avg_water_liters_per_person = 130 
         st.metric("Your Water Usage (L/person/month)", f"{per_person_monthly_water:.2f} L")
         st.metric("Average Water Usage (L/person/month)", f"{avg_water_liters_per_person * 30:.2f} L")
         if per_person_monthly_water > avg_water_liters_per_person * 30:
@@ -1677,35 +1085,27 @@ def page_reporting():
 
         st.markdown("#### Your Transport Carbon Footprint")
         if st.session_state.transport_carbon_results:
-            # Variables from session state
             total_monthly_km = st.session_state.transport_carbon_results["total_monthly_km"]
             emission_factor = st.session_state.transport_carbon_results["emission_factor"]
             people_count = st.session_state.transport_carbon_results["people_count"]
             vehicle_name = st.session_state.transport_carbon_results["vehicle_name"]
-            vehicle_type = customer_data['Vehicle_Type'] # Use vehicle_type from customer_data to get overall transport type
+            vehicle_type = customer_data['Vehicle_Type']
             
-            # Recalculate total emissions based on per-person logic if applicable
-            # The calculation `(emission_factor_disp * total_monthly_km_disp) / (people_count_disp if people_count_disp > 0 else 1)`
-            # was already stored in `st.session_state.total_emissions` upon form submission.
             total_emissions_per_person = st.session_state.total_emissions 
 
             st.metric("Monthly CO₂ Emissions", f"{total_emissions_per_person:.1f} kg CO₂e")
             st.metric("Emission Factor", f"{emission_factor:.4f} kg CO2/km")
             st.metric("Vehicle Used", vehicle_name)
 
-            z_score_emission = calculate_z_score_emission(emission_factor) # Use the global mean/std for Z-score
+            z_score_emission = calculate_z_score_emission(emission_factor)
             st.metric("Emission Z-Score", f"{z_score_emission:.2f}")
 
-            # Store updated transport_carbon_results for PDF generation
             st.session_state.transport_carbon_results['total_emissions'] = total_emissions_per_person
             st.session_state.transport_carbon_results['z_score_emission'] = z_score_emission
             st.session_state.transport_carbon_results['emission_category'] = "High" if z_score_emission > 1 else ("Average" if z_score_emission > -1 else "Low")
-            # Recommendations are now calculated and stored separately below.
-
-
-            # --- START NEWLY ADDED CODE (Transport Section) ---
+            
             if emission_factor > 0:
-                z_score = calculate_z_score_emission(emission_factor) # Use the correct function
+                z_score = calculate_z_score_emission(emission_factor)
                 
                 st.header("Emission Analysis")
                 col1, col2, col3 = st.columns(3)
@@ -1729,10 +1129,9 @@ def page_reporting():
                     
                     st.metric("Category", f"{color} {emission_category}")
 
-            if st.session_state.get('calculated', False): # Use .get for safety
-                total_kg = st.session_state.total_emissions # Per person total emissions
+            if st.session_state.get('calculated', False):
+                total_kg = st.session_state.total_emissions
                 
-                # Alternatives were already calculated and stored in st.session_state.emissions_data
                 alternatives = st.session_state.emissions_data
                 
                 st.info(f"""
@@ -1742,11 +1141,8 @@ def page_reporting():
                 - Population std dev: {emission_std:.4f} kg CO2/km
                 """)
                 
-                # Removed results_text as it's not being used directly
-                
                 recommendations = []
                 
-                # Using total_emissions_per_person (which is st.session_state.total_emissions)
                 if total_kg > 100:
                     recommendations.append("Your carbon footprint from commuting is quite high. Consider switching to more sustainable transport options.")
                 elif total_kg > 50:
@@ -1757,16 +1153,12 @@ def page_reporting():
                 if vehicle_type == "Private Transport" and people_count == 1:
                     recommendations.append("Consider carpooling to reduce emissions. Sharing your ride with 3 other people could reduce your emissions by up to 75%.")
                 
-                # NEW: Add recommendation for multiple vehicles
-                if vehicle_type == "Combined Transport" and "Multiple Vehicles" in vehicle_name: # Check for the specific naming
+                if vehicle_type == "Combined Transport" and "Multiple Vehicles" in vehicle_name:
                     recommendations.append("You are using multiple private vehicles in your commute, which can significantly increase your carbon footprint. Consider consolidating trips or switching to more eco-friendly options for some legs of your journey.")
                 
-                # Ensure fuel_type is available if needed for recommendations
-                # For `vehicle_name_disp` if it contains fuel type.
                 if "petrol" in vehicle_name_disp.lower() or "diesel" in vehicle_name_disp.lower():
                     recommendations.append("Consider switching to an electric vehicle to significantly reduce your carbon footprint.")
                 
-                # Compare with specific public transport options if higher emissions
                 bus_emissions = (total_monthly_km_disp * emission_factors["public_transport"]["bus"]["electric"]) / (people_count_disp if people_count_disp > 0 else 1)
                 metro_emissions = (total_monthly_km_disp * emission_factors["public_transport"]["metro"]) / (people_count_disp if people_count_disp > 0 else 1)
                 
@@ -1776,7 +1168,7 @@ def page_reporting():
                 if total_kg > 2 * metro_emissions:
                     recommendations.append(f"Using metro could reduce your emissions by approximately {(total_kg - metro_emissions) / total_kg * 100:.1f}%.")
                 
-                st.session_state.recommendations = recommendations # Store for PDF generation
+                st.session_state.recommendations = recommendations
                 
                 
                 st.divider()
@@ -1785,7 +1177,7 @@ def page_reporting():
                 col1_cf, col2_cf = st.columns([1, 1])
                 
                 with col1_cf:
-                    total_kg = st.session_state.total_emissions # Per person total emissions
+                    total_kg = st.session_state.total_emissions
                     
                     if total_kg > 100:
                         emissions_color = "red"
@@ -1802,7 +1194,7 @@ def page_reporting():
                     sustainability_rating_index = int(min(2, total_kg/50)) if total_kg >= 0 else 0
                     st.markdown(f"<div style='color:{emissions_color}; font-size:18px;'><strong>Sustainability Rating:</strong> {['Low', 'Moderate', 'High'][sustainability_rating_index]}</div>", unsafe_allow_html=True)
                     
-                    avg_emissions = 200 # Fixed average for comparison 
+                    avg_emissions = 200 
                     if avg_emissions > 0: 
                         if total_kg < avg_emissions:
                             st.success(f"Your emissions are {(1 - total_kg/avg_emissions) * 100:.1f}% lower than the average commuter.")
@@ -1856,54 +1248,36 @@ def page_reporting():
                 st.header("Sustainability Recommendations")
                 for i, rec in enumerate(st.session_state.recommendations):
                     st.markdown(f"**{i+1}. {rec}**")
-            # --- END NEWLY ADDED CODE (Transport Section) ---
 
         else:
             st.info("No transport carbon footprint data available. Please complete the input on the '1. New Customer Assessment' page.")
 
-        # Define placeholder variables for the new snippet to work
-        # NOTE: These are approximations based on the available data in page_evaluation
-        # and may not perfectly reflect the original intent of the provided snippet's context.
-        temp_new_customer = {
-            'Water': per_person_monthly_water if 'per_person_monthly_water' in locals() else 0,
-            'Electricity': individual_equivalent_consumption if 'individual_equivalent_consumption' in locals() else 0,
-            'MPCE': user_mpce_value if 'user_mpce_value' in locals() else 0, # Use user_mpce_value directly
-            'Private_Transport': customer_data.get('Private_Monthly_Km', 0.0), # Use stored value
-            'Public_Transport': customer_data.get('Public_Monthly_Km', 0.0), # Use stored value
-            'Company Score': crisil_esg if 'crisil_esg' in locals() else 0
-        }
-        # Assuming z_vals and inverse_scoring are from a different context; defining minimally to avoid errors
         z_vals = {}
         inverse_scoring = False
 
-        # Start of the code block provided by the user
         z_score = 0
         
-        # Water component 
         water_z = (temp_new_customer['Water'] - 3900) / 3900
-        z_score += water_z * 0.25  # 25% weight
+        z_score += water_z * 0.25
         
-        # Electricity component 
-        electricity_z = max(0, (individual_equivalent_consumption - 300) / 300)  
-        z_score += electricity_z * 0.25  # 25% weight
+        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)  
+        z_score += electricity_z * 0.25
         
-        # Private transport component 
         private_transport_z = temp_new_customer.get('Private_Transport', 0) / 1000  
-        z_score += private_transport_z * 0.25  # 25% weight
+        z_score += private_transport_z * 0.25
         
-        # Public transport component (bonus for usage, negative z for bonus)
         public_transport_z = -min(1, temp_new_customer.get('Public_Transport', 0) / 500) 
-        z_score += public_transport_z * 0.15  # 15% weight
+        z_score += public_transport_z * 0.15
         
         company_z = -(temp_new_customer.get('Company Score', 0) / 100)  
-        z_score += company_z * 0.10  # 10% weight
+        z_score += company_z * 0.10
         
         sust_score = 500 * (1 - np.tanh(z_score/2.5))
 
         norm_vals = {}
         for feat, val in temp_new_customer.items():
             if feat in z_vals:  
-                cmin, cmax = (0, 1000)  # Default range
+                cmin, cmax = (0, 1000)
                 if cmax == cmin:
                     norm_vals[feat] = 1
                 else:
@@ -1918,13 +1292,9 @@ def page_reporting():
         
         col1, col2 = st.columns(2)
         with col1:
-            # Re-using existing variables from page_evaluation for these metrics
-            # Note: water_units, num_people, usage_type are not available directly in this scope,
-            # but per_person_monthly_water is.
-            # I will use per_person_monthly_water and derive water_units for plotting.
             if 'per_person_monthly_water' in locals() and household_size > 0:
-                monthly_water = per_person_monthly_water * household_size # This would be total water for the household
-                per_person_monthly = per_person_monthly_water # Already per person
+                monthly_water = per_person_monthly_water * household_size
+                per_person_monthly = per_person_monthly_water
                 
                 average_monthly_per_person = 130 * 30 
                 
@@ -1963,10 +1333,7 @@ def page_reporting():
             if "individual_equivalent_consumption" in locals():
                 st.metric("Personal Electricity Usage", f"{individual_equivalent_consumption:.2f} kWh")
             
-            # This part for 'Company Score' seems to re-implement display logic already there.
-            # I will attempt to re-use the `display_score` if it's available from the main ESG comparison.
-            # If not, I'll use `crisil_esg`.
-            display_score = crisil_esg # Default to input ESG score
+            display_score = crisil_esg
             score_source = "Input"
             if 'esg_comparison_method' in st.session_state:
                 compare_method = st.session_state['esg_comparison_method']
@@ -1979,34 +1346,24 @@ def page_reporting():
                                 company_data_row = company_data_row_filtered.iloc[0]
                                 display_score = company_data_row['Environment_Score']
                                 score_source = f"from {selected_company}"
-                else:  # Custom score method
+                else:
                     if 'crisil_esg_score_input' in st.session_state:
                         display_score = st.session_state['crisil_esg_score_input']
                         score_source = "Custom Input"
             st.metric("Company Environment Score",f"{display_score:.2f}", help=f"Score {score_source}")
 
-            # <<< START OF MODIFICATION >>>
-            # Conditionally format the MPCE display value
-            if user_mpce_range_name == "₹25,000+":
-                mpce_display_value = "25,000+ ₹"
-            else:
-                mpce_display_value = f"{mpce_range_values[user_mpce_range_index][1]:,.2f} ₹"
-            st.metric("MPCE", mpce_display_value)
-            # <<< END OF MODIFICATION >>>
-
-            st.metric("Water Usage", f"{temp_new_customer.get('Water', 0):.2f}") # Use .get for safety
+            st.metric("Water Usage", f"{temp_new_customer.get('Water', 0):.2f}")
             st.metric("Public Transport", f"{temp_new_customer.get('Public_Transport', 0):.2f}")
             st.metric("Private Transport", f"{temp_new_customer.get('Private_Transport', 0):.2f}")
             
-            st.metric("Z-Score", f"{z_score:.2f}") # This z_score is calculated from the snippet.
-            st.metric("Sustainability Score", f"{sust_score:.2f}") # This sust_score is calculated from the snippet.
+            st.metric("Z-Score", f"{z_score:.2f}")
+            st.metric("Sustainability Score", f"{sust_score:.2f}")
 
-            # Compute rank: count how many existing scores exceed this one, then +1
             if 'scored_data' in st.session_state and 'Sustainability_Score' in st.session_state.scored_data:
                 existing = st.session_state.scored_data["Sustainability_Score"]
                 sust_rank = (existing > sust_score).sum() + 1
             else:
-                sust_rank = 1  # Default rank if no comparison data available
+                sust_rank = 1
 
             st.metric("Sustainability Rank", f"{sust_rank}")
 
@@ -2022,46 +1379,41 @@ def page_reporting():
             st.info(f"Performance: **{abs(z_score):.2f} SD {z_description} mean**")
         
         with col2:
-            # --- FIX 3: Pie chart components ---
-            # Construct the features and their values for the pie chart
             pie_chart_data = {}
 
             if temp_new_customer['Electricity'] > 0:
                 pie_chart_data['Personal Electricity Usage (kWh)'] = temp_new_customer['Electricity']
             if temp_new_customer['Water'] > 0:
-                pie_chart_data['Water Usage (L/person/month)'] = temp_new_customer['Water'] # Assuming this is per person value
+                pie_chart_data['Water Usage (L/person/month)'] = temp_new_customer['Water']
             if temp_new_customer['Company Score'] > 0:
                 pie_chart_data['Company Score'] = temp_new_customer['Company Score']
 
-            # Add transport components only if they are greater than 0
             if temp_new_customer['Private_Transport'] > 0:
                 pie_chart_data['Private Transport (Km/month)'] = temp_new_customer['Private_Transport']
             if temp_new_customer['Public_Transport'] > 0:
                 pie_chart_data['Public Transport (Km/month)'] = temp_new_customer['Public_Transport']
             
-            # Filter out entries with 0 value for the pie chart for cleaner visualization
             active_pie_features = {k: v for k, v in pie_chart_data.items() if v > 0}
 
             if active_pie_features:  
                 total_sum_for_pie = sum(active_pie_features.values())
-                if total_sum_for_pie == 0: # Avoid division by zero if all values are 0
+                if total_sum_for_pie == 0:
                     st.info("No active features with positive values to display for pie chart.")
-                    # Removed 'return' to allow remaining code in col2 to execute if any
                 else:
                     pie_values = list(active_pie_features.values())
                     pie_labels = list(active_pie_features.keys())
 
-                    explode = [0.1 if i % 2 == 0 else 0 for i in range(len(pie_labels))] # Keep explode if desired
+                    explode = [0.1 if i % 2 == 0 else 0 for i in range(len(pie_labels))]
                     
                     fig_pie_weights, ax_pie_weights = plt.subplots(figsize=(6,6))
                     ax_pie_weights.pie(
-                        pie_values, # Use actual values for distribution
+                        pie_values,
                         labels=pie_labels,
                         autopct='%1.1f%%',
                         startangle=90,
                         explode=explode
                     )
-                    ax_pie_weights.set_title('Contribution of Inputs to Customer Profile') # More descriptive title
+                    ax_pie_weights.set_title('Contribution of Inputs to Customer Profile')
                     st.pyplot(fig_pie_weights)
                     
                     for feat, value in active_pie_features.items():
@@ -2069,10 +1421,7 @@ def page_reporting():
                         st.info(f"{feat} contributes {percentage_contribution:.1f}% (Value: {value:.2f})")
             else:
                 st.info("No active features with positive values to display for pie chart.")
-        # End of the code block provided by the user
-
-
-        # ESG Comparison Visualizations (moved here as per request 2)
+        
         company_data = st.session_state.company_data
         if company_data is not None:
             st.subheader("ESG Comparison Benchmarking")
@@ -2093,7 +1442,7 @@ def page_reporting():
                     elif selected_esg_emp_size == "Medium (5,000 to 15,000)":
                         df_filtered = df_sector[(df_sector['Total_Employees'] >= 5000) & (df_sector['Total_Employees'] <= 15000)]
                         emp_range_text = "5,000 to 15,000"
-                    else:  # Large (>15,000)
+                    else:
                              df_filtered = df_sector[df_sector['Total_Employees'] > 15000]
                              emp_range_text = "more than 15,000"
                     if len(df_filtered) > 0:
@@ -2108,7 +1457,7 @@ def page_reporting():
 
                         min_z = df_results['Env_Z_Score'].min()
                         max_z = df_results['Env_Z_Score'].max()
-                        df_results['Normalized_Score'] = ((df_results['Env_Z_Score'] - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 50 # Handle division by zero
+                        df_results['Normalized_Score'] = ((df_results['Env_Z_Score'] - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 50
 
                         st.dataframe(
                             df_results[[
@@ -2155,16 +1504,13 @@ def page_reporting():
                                     st.warning(f"Selected company '{selected_company_for_comparison}' not found in the filtered dataset (Industry: {selected_esg_industry}, Employee Size: {selected_esg_emp_size}). Please ensure the company name matches exactly or check for case sensitivity.")
                             
                             else:
-                                # <<< START: MODIFIED CODE BLOCK >>>
                                 st.markdown("#### Benchmark Group Analysis")
                                 st.info(f"No specific company selected. Displaying aggregate metrics for the **{len(df_filtered)}** companies in the **{selected_esg_industry}** sector with **{emp_range_text}** employees.")
 
-                                # Calculate additional metrics
                                 median_score = df_filtered['Environment_Score'].median()
                                 max_score = df_filtered['Environment_Score'].max()
                                 min_score = df_filtered['Environment_Score'].min()
 
-                                # Display metrics in columns
                                 col1, col2, col3 = st.columns(3)
                                 with col1:
                                     st.metric("Number of Companies", f"{len(df_filtered)}")
@@ -2181,20 +1527,23 @@ def page_reporting():
                                 with col6:
                                     st.metric("Lowest Score", f"{min_score:.2f}")
 
-                                # Add a box plot for better visualization of the distribution
                                 st.markdown("##### Score Distribution Box Plot")
                                 fig_box = px.box(df_filtered, y="Environment_Score", 
                                                title=f"Score Distribution for {selected_esg_industry} ({emp_range_text} employees)",
                                                points="all", hover_data=['Company_Name'])
                                 fig_box.update_layout(yaxis_title="Environment Score")
                                 st.plotly_chart(fig_box, use_container_width=True)
-                                # <<< END: MODIFIED CODE BLOCK >>>
 
-                        else: # Custom score method
-                            custom_score = custom_esg_score_for_comparison
-                            custom_z = (custom_score - baseline_mean) / baseline_std
-                            custom_norm = ((custom_z - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 0  # Fallback to 0 for normalization
+                        else: 
+                            custom_score = st.session_state.get('crisil_esg_score_input', 0.0)
+                            
+                            if baseline_std > 0:
+                                custom_z = (custom_score - baseline_mean) / baseline_std
+                            else:
+                                custom_z = 0
 
+                            custom_norm = ((custom_z - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 0
+                            
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("Environment Score", f"{custom_score:.2f}")
@@ -2308,32 +1657,41 @@ def page_reporting():
                             st.warning(f"Selected company '{selected_company_for_comparison}' not found in the dataset. Please adjust your selection.")
                     else:
                         st.info("Please select a company on page 1 to see its comparison here.")
-                else: # Custom score comparison
-                    custom_score = custom_esg_score_for_comparison
-                    custom_z = (custom_score - overall_mean) / overall_std
-                    percentile = (company_data['Environment_Score'] < custom_score).mean() * 100
+                else:
+                    custom_score = st.session_state.get('crisil_esg_score_input')
 
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        z_description = "above" if custom_z > 0 else "below"
-                        st.metric("Z-Score",
-                                f"{custom_z:.2f}",
-                                f"{abs(custom_z):.2f} SD {z_description} mean")
-                    with col2:
-                        perf_description = "outperforms" if custom_z > 0 else "underperforms"
-                        st.metric("Performance", f"{perf_description} by {abs(custom_z):.2f} SD")
-                    with col3:
-                        st.metric("Percentile", f"{percentile:.1f}%")
+                    if isinstance(custom_score, (int, float)):
+                        
+                        if overall_std > 0:
+                            custom_z = (custom_score - overall_mean) / overall_std
+                        else:
+                            custom_z = 0.0
+                        
+                        percentile = (company_data['Environment_Score'] < custom_score).mean() * 100
 
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.histplot(company_data['Environment_Score'], kde=True, ax=ax)
-                    ax.axvline(overall_mean, color='red', linestyle='--', label=f'Mean ({overall_mean:.2f})')
-                    ax.axvline(custom_score, color='blue', linestyle='-',
-                            label=f'Your Company ({custom_score:.2f}, Z={custom_z:.2f})')
-                    ax.set_xlabel('Environment Score')
-                    ax.set_title(f'Distribution of Environment Scores Across All Companies')
-                    ax.legend()
-                    st.pyplot(fig)
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            z_description = "above" if custom_z > 0 else "below"
+                            st.metric("Z-Score",
+                                    f"{custom_z:.2f}",
+                                    f"{abs(custom_z):.2f} SD {z_description} mean")
+                        with col2:
+                            perf_description = "outperforms" if custom_z > 0 else "underperforms"
+                            st.metric("Performance", f"{perf_description} by {abs(custom_z):.2f} SD")
+                        with col3:
+                            st.metric("Percentile", f"{percentile:.1f}%")
+
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        sns.histplot(company_data['Environment_Score'], kde=True, ax=ax)
+                        ax.axvline(overall_mean, color='red', linestyle='--', label=f'Mean ({overall_mean:.2f})')
+                        
+                        ax.axvline(custom_score, color='blue', linestyle='-',
+                                label=f'Your Company ({custom_score:.2f}, Z={custom_z:.2f})')
+                        
+                        ax.set_xlabel('Environment Score')
+                        ax.set_title(f'Distribution of Environment Scores Across All Companies')
+                        ax.legend()
+                        st.pyplot(fig)
 
                     selected_sector_for_comparison = st.selectbox("Compare with Sector (Optional)",
                                             ["(None)"] + sorted([str(x) for x in company_data['Sector_classification'].dropna().unique()]),
@@ -2379,7 +1737,6 @@ def page_reporting():
             st.info("Company data unavailable for ESG comparison visualizations.")
 
         st.subheader("Generate Sustainability Report (PDF)")
-        # PDF generation section
         has_required_data = (
             ('single_customer_inputs' in st.session_state and st.session_state.single_customer_inputs) and
             ('transport_carbon_results' in st.session_state and st.session_state.transport_carbon_results)
@@ -2390,20 +1747,19 @@ def page_reporting():
                     try:
                         scored_df = st.session_state.get('scored_data', pd.DataFrame())
                         if scored_df is None or scored_df.empty:
-                            # Create a DataFrame for the current customer for PDF if no bulk data
                             current_customer_df = pd.DataFrame([st.session_state.single_customer_inputs])
                             current_customer_df['Sustainability_Score'] = st.session_state.calculated_single_customer_score
                             current_customer_df['Electricity'] = st.session_state.single_customer_inputs['Electricity']
-                            current_customer_df['Water'] = st.session_state.single_customer_inputs['Water_Monthly_Total'] # Use total water for PDF
+                            current_customer_df['Water'] = st.session_state.single_customer_inputs['Water_Monthly_Total']
                             current_customer_df['Crisil_ESG_Score'] = st.session_state.single_customer_inputs['Crisil_ESG_Score']
 
-                            scored_df = current_customer_df # Use this as the basis for the PDF
+                            scored_df = current_customer_df
 
                         pdf_file = generate_pdf(
                             scored_df,
                             pd.DataFrame([st.session_state.single_customer_inputs]),
-                            st.session_state.recommendations, # Use the recommendations from session state
-                            st.session_state.transport_carbon_results # Use the full transport results dict
+                            st.session_state.recommendations,
+                            st.session_state.transport_carbon_results
                         )
 
                         if pdf_file:
@@ -2437,18 +1793,15 @@ def page_reporting():
 
         if st.button("Process & Display Bulk Results", key="process_batch_now_page3"):
             with st.spinner("Processing batch data..."):
-                # Ensure emission_factors are accessible
                 emission_factors_transport = emission_factors
 
                 test_with_scores = []
-                # MPCE related variables are kept for other parts of the script if needed, but not for electricity z-score
+                # MPCE related variables are kept for bulk parts of the script if needed
                 mpce_ranges = ["₹1-1,000", "₹1,000-5,000", "₹5,000-10,000", "₹10,000-25,000", "₹25,000+"]
                 mpce_range_values = [(0, 1000), (1000, 5000), (5000, 10000), (10000, 25000), (25000, float('inf'))]
 
-                # --- NEW: Calculate global mean and std for electricity for individual z-score ---
-                # This is done once before the loop for efficiency.
                 global_electricity_mean = 0
-                global_electricity_std = 1 # Default to 1 to avoid division by zero
+                global_electricity_std = 1 
                 if st.session_state.electricity_data is not None and not st.session_state.electricity_data.empty:
                     global_electricity_mean = st.session_state.electricity_data['qty_usage_in_1month'].mean()
                     global_electricity_std = st.session_state.electricity_data['qty_usage_in_1month'].std()
@@ -2456,26 +1809,12 @@ def page_reporting():
 
                 for idx, row in test_df.iterrows():
                     try:
-                        # Extract data from row, handle missing values
                         total_electricity_kwh = float(row.get("Electricity", 0.0)) if row.get("Electricity") is not None else 0.0
                         household_count = int(row.get("People in the household", 1)) if not pd.isna(row.get("People in the household")) else 1
                         
-                        # >>> MODIFICATION START: Logic to divide electricity usage based on household size <<<
-                        if household_count <= 1:
-                            divisor = 1
-                        elif household_count == 2:
-                            divisor = 1.75
-                        elif household_count == 3:
-                            divisor = 2.5
-                        elif household_count == 4:
-                            divisor = 3.25
-                        # Covers 5, 6, 7 and so on for (n-1)
-                        else: 
-                            divisor = household_count - 1
+                        divisor = household_count 
                         
-                        # Adjust electricity for individual comparison.
                         individual_electricity_kwh = total_electricity_kwh / divisor if divisor > 0 else total_electricity_kwh
-                        # >>> MODIFICATION END <<<
                         
                         water_input_type = str(row.get("Water (Monthly or Daily)", "monthly")).strip().lower()
                         water_value = float(row.get("Water (Monthly or Daily) Value", 0.0)) if not pd.isna(row.get("Water (Monthly or Daily) Value")) else 0.0
@@ -2485,12 +1824,10 @@ def page_reporting():
                         else:
                             total_water_liters = water_value * household_count
 
-                        # These variables are no longer used for the electricity Z-score but might be used elsewhere.
                         state_name_raw = str(row.get("State/UT", "")).strip().lower()
                         rural_urban_raw = str(row.get("Rural/Urban", "rural")).strip().lower()
                         user_sector = 1 if rural_urban_raw == 'rural' else 2
 
-                        # The rest of the data extraction remains unchanged
                         vehicle_type_csv = str(row.get("Vehicle (Drop Down)", row.get("Vehicle", ""))).strip()
                         engine_fuel_csv = str(row.get("Engine (Drop Down)", "")).strip()
                         km_per_month_csv = float(row.get("Km_per_month", 0.0)) if not pd.isna(row.get("Km_per_month")) else 0.0
@@ -2498,7 +1835,6 @@ def page_reporting():
                         company_sector_csv = str(row.get("Industry (Sector_classification)", "")) if not pd.isna(row.get("Industry (Sector_classification)")) else ""
                         num_employees_csv = int(row.get("Number of Employees", None)) if not pd.isna(row.get("Number of Employees")) else None
 
-                        # Transport emission calculation (replicated original logic)
                         commute_emission_calc = 0.0
                         chosen_ef = 0.0
                         if vehicle_type_csv.lower() in ["two_wheeler", "2 wheeler", "three_wheeler", "four_wheeler", "public_transport"]:
@@ -2542,28 +1878,22 @@ def page_reporting():
                             
                         commute_emission_calc = chosen_ef
 
-                        # --- Z-Score and Final Score Calculation ---
                         
-                        # >>> MODIFICATION START: Individual Electricity Z-score (NOT based on location or MPCE) <<<
-                        # The old location-based and MPCE-based z-scores are replaced by this single calculation.
+
                         electricity_z_score = (individual_electricity_kwh - global_electricity_mean) / global_electricity_std if global_electricity_std > 0 else 0
                         electricity_z_score = np.clip(electricity_z_score, -3, 3) # Cap between -3 and 3
-                        # >>> MODIFICATION END <<<
 
 
-                        # Water Z-score (Unchanged)
                         average_monthly_per_person_water_batch = 130 * 30 # Baseline: 130 liters/day * 30 days
                         water_z_score_batch = (total_water_liters / (household_count if household_count > 0 else 1) - average_monthly_per_person_water_batch) / average_monthly_per_person_water_batch if average_monthly_per_person_water_batch > 0 else 0
                         water_z_score_batch = np.clip(water_z_score_batch, -3, 3)
 
-                        # Transport Z-score (Unchanged)
                         monthly_co2_emissions_batch = (commute_emission_calc * km_per_month_csv)
                         avg_commute_emissions_batch = 50 # Example baseline
                         commute_z_score_batch = (monthly_co2_emissions_batch - avg_commute_emissions_batch) / avg_commute_emissions_batch if avg_commute_emissions_batch > 0 else 0
                         commute_z_score_batch = np.clip(commute_z_score_batch, -3, 3)
 
 
-                        # Company ESG Z-score (Unchanged)
                         crisil_z_score_batch = 0
                         if st.session_state.company_data is not None and not st.session_state.company_data.empty and 'Environment_Score' in st.session_state.company_data.columns:
                             comp_mean_batch = st.session_state.company_data['Environment_Score'].mean()
@@ -2574,9 +1904,7 @@ def page_reporting():
                         crisil_z_score_batch = np.clip(crisil_z_score_batch, -3, 3)
 
 
-                        # >>> MODIFICATION START: Calculate combined Z-score with the new individual electricity z-score <<<
-                        weights_bulk = st.session_state.weights # Use the weights from session state
-                        # The weights for Electricity (State and MPCE) are now combined and applied to the single electricity score.
+                        weights_bulk = st.session_state.weights 
                         total_electricity_weight = weights_bulk["Electricity_State"] + weights_bulk["Electricity_MPCE"]
                         
                         total_z_score_batch = (
@@ -2585,9 +1913,7 @@ def page_reporting():
                             electricity_z_score * total_electricity_weight + # Using the new single z-score
                             (commute_z_score_batch * (weights_bulk["Public_Transport"] + weights_bulk["Private_Transport"]))
                         )
-                        # >>> MODIFICATION END <<<
 
-                        # Calculate Sustainability Score (Unchanged)
                         sustainability_score_batch = 500 * (1 - np.tanh(total_z_score_batch / 2.5))
 
 
@@ -2616,7 +1942,6 @@ def page_reporting():
                 st.markdown("### Bulk Test Results")
                 st.dataframe(results_df)
 
-                # The rest of the display metrics section remains unchanged
                 st.markdown("### Comprehensive Metrics for Bulk Data")
 
                 col1, col2, col3, col4 = st.columns(4)
@@ -2637,8 +1962,6 @@ def page_reporting():
                     total_customers = len(results_df)
                     st.metric("Total Customers", total_customers)
                 
-                # ... (rest of the metrics display code is unchanged) ...
-                # Additional metrics from original code
                 col5, col6, col7, col8 = st.columns(4)
                 with col5:
                     median_score = results_df['Sustainability_Score'].median()
@@ -2655,7 +1978,6 @@ def page_reporting():
                     poor_pct = (poor_count / total_customers * 100) if total_customers > 0 else 0
                     st.metric("Poor Scores (<400)", f"{poor_count} ({poor_pct:.1f}%)")
 
-                # More metrics for bulk analysis
                 col9, col10, col11, col12 = st.columns(4)
                 with col9:
                     avg_electricity = results_df['Electricity'].mean()
@@ -2719,25 +2041,24 @@ def page_reporting():
                     st.metric("Avg Company Z", f"{avg_company_z:.3f}")
         else:
             st.info("Click 'Process & Display Bulk Results' to view the evaluation for the uploaded data.")
-# --- Main Application Logic ---
-# ... (This function remains unchanged)
+
 def main():
     st.sidebar.title("Navigation")
-    # Using a session state variable to keep track of the current page, and a default.
-    # This helps ensure that if a form submission leads to a 'success' message, the user
-    # stays on the same page or can navigate directly to the results.
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "1. New Customer Assessment"
 
     page_options = [
         "1. New Customer Assessment",
-        "2. Company & Electricity Data Insights",
-        "3. Weighted Score Settings",
-        "4. Evaluation Results & Reporting"
+        "2. Weighted Score Settings",
+        "3. Evaluation Results & Reporting"
     ]
-    page_selection = st.sidebar.radio("Go to", page_options, index=page_options.index(st.session_state.current_page))
+    if st.session_state.current_page in page_options:
+        default_index = page_options.index(st.session_state.current_page)
+    else:
+        default_index = 0
+        st.session_state.current_page = page_options[0]
+    page_selection = st.sidebar.radio("Go to", page_options, index=default_index)
 
-    # Update session state if sidebar radio changes
     if page_selection != st.session_state.current_page:
         st.session_state.current_page = page_selection
 
@@ -2747,11 +2068,9 @@ def main():
 
     if st.session_state.current_page == "1. New Customer Assessment":
         page_test_customer()
-    elif st.session_state.current_page == "2. Company & Electricity Data Insights":
-        page_data_comparison()
-    elif st.session_state.current_page == "3. Weighted Score Settings":
+    elif st.session_state.current_page == "2. Weighted Score Settings":
         page_evaluation()
-    elif st.session_state.current_page == "4. Evaluation Results & Reporting":
+    elif st.session_state.current_page == "3. Evaluation Results & Reporting":
         page_reporting()
 
 if __name__ == "__main__":
