@@ -25,8 +25,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
     table { width: 100%; border-collapse: collapse; }
-    table, th, td { border: 1px solid #ddd; }
-    th, td { padding: 8px; text-align: center; }
+    table, th, td { padding: 8px; text-align: center; }
     th {
         background-color: #f2f2f2;
         position: sticky;
@@ -195,6 +194,17 @@ if 'emissions_data' not in st.session_state:
     st.session_state.emissions_data = {}
 if 'recommendations' not in st.session_state: 
     st.session_state.recommendations = []
+# Initialize new session state variables for transport inputs
+if 'distance_input' not in st.session_state:
+    st.session_state.distance_input = 10.0
+if 'days_per_week_input' not in st.session_state:
+    st.session_state.days_per_week_input = 5
+if 'weeks_per_month_input' not in st.session_state:
+    st.session_state.weeks_per_month_input = 4
+if 'private_trips_per_day_input' not in st.session_state: # New
+    st.session_state.private_trips_per_day_input = 1
+if 'public_trips_per_day_input' not in st.session_state: # New
+    st.session_state.public_trips_per_day_input = 1
 
 
 @st.cache_data
@@ -267,6 +277,127 @@ def calculate_z_score_emission(emission_factor_val):
         return 0
     return (emission_factor_val - emission_mean) / emission_std
 
+# --- Unified Sustainability Score Calculation Function ---
+def calculate_sustainability_score(customer_data, company_data_df, electricity_data_df, weights, emission_mean, emission_std):
+    """
+    Calculates the overall sustainability score and individual Z-scores for a customer.
+
+    Args:
+        customer_data (dict): Dictionary containing customer inputs.
+        company_data_df (pd.DataFrame): DataFrame with company ESG data.
+        electricity_data_df (pd.DataFrame): DataFrame with electricity consumption data.
+        weights (dict): Dictionary of weights for each sustainability factor.
+        emission_mean (float): Mean emission factor for transport.
+        emission_std (float): Standard deviation of emission factors for transport.
+
+    Returns:
+        dict: A dictionary containing individual Z-scores, total Z-score, and sustainability score.
+    """
+    st.write(f"DEBUG: calculate_sustainability_score received customer_data: {customer_data}")
+
+    # Extract customer inputs
+    user_electricity = customer_data.get('Electricity', 0.0)
+    household_size = customer_data.get('People in the household', 1)
+    crisil_esg = customer_data.get('Crisil_ESG_Score', 0.0)
+    per_person_monthly_water = customer_data.get('Water_Per_Person_Monthly', 0.0)
+    
+    # Transport inputs (now derived from total_monthly_km and category)
+    private_monthly_km = customer_data.get('Private_Monthly_Km', 0.0)
+    public_monthly_km = customer_data.get('Public_Monthly_Km', 0.0)
+    
+    # Ensure household_size is at least 1 to avoid division by zero
+    safe_household_size = household_size if household_size > 0 else 1
+    
+    # Calculate individual equivalent electricity consumption
+    individual_equivalent_consumption = user_electricity / safe_household_size
+    st.write(f"DEBUG: Individual Equivalent Electricity Consumption: {individual_equivalent_consumption}")
+
+
+    # --- Z-score Calculation for each factor ---
+
+    # 1. Electricity Z-score
+    electricity_z = 0
+    if electricity_data_df is not None and not electricity_data_df.empty and 'qty_usage_in_1month' in electricity_data_df.columns:
+        electricity_baseline = electricity_data_df['qty_usage_in_1month'].mean()
+        electricity_std = electricity_data_df['qty_usage_in_1month'].std()
+        if electricity_std > 0:
+            electricity_z = (individual_equivalent_consumption - electricity_baseline) / electricity_std
+        else:
+            electricity_z = max(0, (individual_equivalent_consumption - electricity_baseline) / 100) # Fallback if std is 0
+    else:
+        # Fallback if electricity data is not loaded or invalid
+        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)
+    st.write(f"DEBUG: Electricity Z-score: {electricity_z}")
+
+    # 2. Water Z-score
+    # Baseline for water consumption (e.g., 130 liters/day * 30 days = 3900 liters/month)
+    average_monthly_per_person_water = 130 * 30
+    water_z = 0
+    if average_monthly_per_person_water > 0:
+        water_z = (per_person_monthly_water - average_monthly_per_person_water) / average_monthly_per_person_water
+    st.write(f"DEBUG: Per Person Monthly Water: {per_person_monthly_water}, Average Monthly Per Person Water: {average_monthly_per_person_water}, Water Z-score: {water_z}")
+
+    # 3. Transport Z-score (using private_monthly_km and public_monthly_km)
+    # Normalizes based on 500 km/month
+    private_transport_z = private_monthly_km / 500
+    # Public transport component (15% weight, gives a bonus for usage)
+    public_transport_z = -min(1, public_monthly_km / 500)
+
+    total_transport_z_score_component = 0
+    
+    # Apply weights as per user's prompt (0.25 for private, 0.15 for public)
+    # If only private, calculate only private. If only public, calculate only public. If both, calculate both.
+    if private_monthly_km > 0 and public_monthly_km == 0:
+        total_transport_z_score_component = private_transport_z * weights["Private_Transport"] # Use actual weight
+    elif private_monthly_km == 0 and public_monthly_km > 0:
+        total_transport_z_score_component = public_transport_z * weights["Public_Transport"] # Use actual weight
+    elif private_monthly_km > 0 and public_monthly_km > 0:
+        total_transport_z_score_component = (private_transport_z * weights["Private_Transport"]) + (public_transport_z * weights["Public_Transport"])
+    else: # No transport used
+        total_transport_z_score_component = 0
+    st.write(f"DEBUG: Private Monthly Km: {private_monthly_km}, Public Monthly Km: {public_monthly_km}, Transport Z-score: {total_transport_z_score_component}")
+    
+    # 4. Company ESG Z-score
+    company_z = 0
+    if company_data_df is not None and not company_data_df.empty and 'Environment_Score' in company_data_df.columns:
+        company_baseline = company_data_df['Environment_Score'].mean()
+        company_std = company_data_df['Environment_Score'].std()
+        if company_std > 0:
+            company_z = (crisil_esg - company_baseline) / company_std
+        else:
+            company_z = (crisil_esg - company_baseline) / 15 # Fallback if std is 0
+    else:
+        # Fallback if company data is not loaded or invalid
+        company_z = (crisil_esg - 70) / 15 # Assuming a baseline of 70 and std of 15
+    # Invert company Z-score so higher ESG scores result in a better (more negative) Z-score
+    company_z = -company_z
+    st.write(f"DEBUG: Company ESG Score: {crisil_esg}, Company Z-score: {company_z}")
+
+    # --- Weighted Total Z-score ---
+    total_z_score = (
+        electricity_z * (weights["Electricity_State"] + weights["Electricity_MPCE"]) +
+        water_z * weights["Water"] +
+        total_transport_z_score_component + # This now includes the weighted private/public transport Z-scores
+        company_z * weights["Company"]
+    )
+    st.write(f"DEBUG: Total Z-score (before tanh): {total_z_score}")
+
+    # --- Sustainability Score Calculation ---
+    # The tanh function scales the total Z-score to a range, and 500 * (1 - ...) maps it to 0-1000
+    sustainability_score = 500 * (1 - np.tanh(total_z_score / 2.5))
+    sustainability_score = np.clip(sustainability_score, 0, 1000) # Ensure score is within 0-1000
+    st.write(f"DEBUG: Sustainability Score: {sustainability_score}")
+
+    return {
+        'electricity_z': electricity_z,
+        'water_z': water_z,
+        'transport_z': total_transport_z_score_component, # Return the combined transport Z-score
+        'company_z': company_z,
+        'total_z_score': total_z_score,
+        'sustainability_score': sustainability_score
+    }
+
+
 # --- PDF Generation Function ---
 def generate_pdf(scored_df, customer_df, recommendations, emissions_data):
     """Generate a PDF report for the sustainability analysis"""
@@ -287,7 +418,7 @@ def generate_pdf(scored_df, customer_df, recommendations, emissions_data):
     test_customer_dict = customer_df.iloc[0].to_dict()
 
     # Removed 'Rural/Urban' and 'MPCE' from PDF generation
-    for col in ['Electricity', 'Water', 'Public_Transport', 'Private_Transport', 'Crisil_ESG_Score', 'Sustainability_Score']:
+    for col in ['Electricity', 'Water', 'Private_Monthly_Km', 'Public_Monthly_Km', 'Crisil_ESG_Score', 'Sustainability_Score']:
         if col in test_customer_dict:
             value = test_customer_dict[col]
             if isinstance(value, (int, float)):
@@ -447,11 +578,14 @@ def page_test_customer():
         st.subheader("Transport Carbon Footprint Calculator")
         col_t1, col_t2, col_t3 = st.columns(3)
         with col_t1:
-            distance = st.number_input("Daily one-way commute distance (km)", min_value=0.1, value=10.0, step=0.5, key="input_distance")
+            distance = st.number_input("Daily one-way commute distance (km)", min_value=0.1, value=st.session_state.distance_input, step=0.5, key="input_distance")
+            st.session_state.distance_input = distance
         with col_t2:
-            days_per_week = st.number_input("Commuting days per week", min_value=1, max_value=7, value=5, step=1, key="input_days_per_week")
+            days_per_week = st.number_input("Commuting days per week", min_value=1, max_value=7, value=st.session_state.days_per_week_input, step=1, key="input_days_per_week")
+            st.session_state.days_per_week_input = days_per_week
         with col_t3:
-            weeks_per_month = st.number_input("Commuting weeks per month", min_value=1, max_value=5, value=4, step=1, key="input_weeks_per_month")
+            weeks_per_month = st.number_input("Commuting weeks per month", min_value=1, max_value=5, value=st.session_state.weeks_per_month_input, step=1, key="input_weeks_per_month")
+            st.session_state.weeks_per_month_input = weeks_per_month
         total_monthly_km = distance * 2 * days_per_week * weeks_per_month
         
         st.session_state.total_monthly_km = total_monthly_km
@@ -513,9 +647,9 @@ def page_test_customer():
                         ef_4w = base_ef * uplift * engine_factor
                         total_private_emission_factor_multiple += ef_4w
                         temp_private_names.append(f"{w4_car_type.replace('_', ' ').title()} ({w4_fuel_type}, {w4_engine_cc}cc)")
-                private_emission_factor = total_private_emission_factor_multiple
+                private_emission_factor = total_private_emission_factor_multiple / num_vehicles if num_vehicles > 0 else 0 
                 private_vehicle_name = f"Multiple Vehicles: {', '.join(temp_private_names)}"
-                people_count_calc = 1
+                people_count_calc = 1 # Assuming average 1 person per vehicle for multiple vehicle emission factor calc
             else:
                 private_vehicle_type = st.selectbox("Private Vehicle Type", ["Two Wheeler", "Three Wheeler", "Four Wheeler"], key="input_private_vehicle")
                 current_private_ef = 0
@@ -584,35 +718,59 @@ def page_test_customer():
             public_emission_factor = current_public_ef
             public_vehicle_name = current_public_name
         
-        private_trips_input = 1
-        total_trips_input = 2
+        # Calculate private_monthly_km and public_monthly_km based on transport_category
+        private_monthly_km = 0.0
+        public_monthly_km = 0.0
 
         if transport_category == "Private Transport":
             emission_factor_calc = private_emission_factor
             vehicle_type_calc = "Private Transport"
             vehicle_name_calc = private_vehicle_name
+            private_monthly_km = total_monthly_km
+            public_monthly_km = 0.0
         elif transport_category == "Public Transport":
             emission_factor_calc = public_emission_factor
             vehicle_type_calc = "Public Transport"
             vehicle_name_calc = public_vehicle_name
             people_count_calc = current_public_people
+            private_monthly_km = 0.0
+            public_monthly_km = total_monthly_km
         elif transport_category == "Both Private and Public":
             st.markdown("##### Usage Distribution (for Both Private and Public)")
-            private_trips_input = st.number_input("Number of trips per day using private transport", min_value=0, max_value=10, value=1, step=1, key="input_private_trips")
-            total_trips_input = st.number_input("Total number of trips per day", min_value=1, max_value=10, value=2, step=1, key="input_total_trips")
-            private_ratio = private_trips_input / total_trips_input if total_trips_input > 0 else 0
-            public_ratio = 1 - private_ratio
+            # Updated inputs for private and public trips per day
+            private_trips_per_day = st.number_input("Number of private trips per day", min_value=0, max_value=10, value=st.session_state.private_trips_per_day_input, step=1, key="input_private_trips_per_day")
+            public_trips_per_day = st.number_input("Number of public trips per day", min_value=0, max_value=10, value=st.session_state.public_trips_per_day_input, step=1, key="input_public_trips_per_day")
+            
+            st.session_state.private_trips_per_day_input = private_trips_per_day
+            st.session_state.public_trips_per_day_input = public_trips_per_day
+
+            total_trips_per_day = private_trips_per_day + public_trips_per_day
+            
+            if total_trips_per_day > 0:
+                private_ratio = private_trips_per_day / total_trips_per_day
+                public_ratio = public_trips_per_day / total_trips_per_day
+            else:
+                private_ratio = 0.0
+                public_ratio = 0.0
+            
+            private_monthly_km = total_monthly_km * private_ratio
+            public_monthly_km = total_monthly_km * public_ratio
+
             combined_emission_factor = (private_emission_factor / (people_count_calc if people_count_calc > 0 else 1)) * private_ratio + \
                                        (public_emission_factor / (current_public_people if current_public_people > 0 else 1)) * public_ratio
             emission_factor_calc = combined_emission_factor
             vehicle_type_calc = "Combined Transport"
             vehicle_name_calc = f"{private_vehicle_name} ({private_ratio*100:.0f}%) & {public_vehicle_name} ({public_ratio*100:.0f}%)"
-            people_count_calc = 1
+            people_count_calc = 1 # For combined, we consider the overall emission factor per person
 
         if st.button("Submit Assessment (Proceed to next page for evaluation)"):
             
             final_esg_score = 0.0
             compare_method = st.session_state.get('form_esg_comparison_method')
+            
+            # Initialize employee_size_value and selected_company_name for CSV download
+            employee_size_value_for_csv = None
+            selected_company_name_for_csv = None
 
             if compare_method == "Enter custom score":
                 final_esg_score = st.session_state.get('enter_custom_esg_score', 0.0)
@@ -626,8 +784,9 @@ def page_test_customer():
                         company_row = company_df[company_df['Company_Name'] == selected_company_name]
                         if not company_row.empty:
                             final_esg_score = company_row.iloc[0]['Environment_Score']
-                
-                else:
+                            selected_company_name_for_csv = selected_company_name # Save selected company name
+
+                else: # No specific company selected, use average for Employee Range Analysis if applicable
                     company_df = st.session_state.get('company_data')
                     analysis_type = st.session_state.get('crisil_analysis_type')
 
@@ -643,10 +802,13 @@ def page_test_customer():
                         if employee_size_cat:
                             if employee_size_cat == "Small (<5,000)":
                                 df_to_filter = df_to_filter[df_to_filter['Total_Employees'] < 5000]
+                                employee_size_value_for_csv = 5000
                             elif employee_size_cat == "Medium (5,000 to 15,000)":
                                 df_to_filter = df_to_filter[(df_to_filter['Total_Employees'] >= 5000) & (df_to_filter['Total_Employees'] <= 15000)]
+                                employee_size_value_for_csv = 15000
                             else: # Large
                                 df_to_filter = df_to_filter[df_to_filter['Total_Employees'] > 15000]
+                                employee_size_value_for_csv = 15000 # As per user's request for >15000
 
                         if not df_to_filter.empty:
                             average_score = df_to_filter['Environment_Score'].mean()
@@ -661,23 +823,10 @@ def page_test_customer():
             st.session_state.selected_company_for_comparison = st.session_state.get('select_company_for_comparison', None)
             st.session_state.esg_comparison_method = st.session_state.form_esg_comparison_method
             
-            if st.session_state.crisil_esg_score_input == 0.0 and st.session_state.user_electricity == 0.0 and st.session_state.water_units == 0.0 and st.session_state.total_monthly_km == 0.0:
+            if st.session_state.crisil_esg_score_input == 0.0 and st.session_state.user_electricity == 0.0 and st.session_state.water_units == 0.0 and total_monthly_km == 0.0:
                 st.error("Please enter at least one input for Crisil ESG, Electricity, Water, or Transport to submit the assessment.")
             else:
                 st.success("Customer data submitted! You can now navigate to '3. Evaluation Results & Reporting' to see the assessment.")
-
-                private_monthly_km = 0
-                public_monthly_km = 0
-
-                if transport_category == "Private Transport":
-                    private_monthly_km = total_monthly_km
-                elif transport_category == "Public Transport":
-                    public_monthly_km = total_monthly_km
-                elif transport_category == "Both Private and Public":
-                    private_ratio_calculated = private_trips_input / total_trips_input if total_trips_input > 0 else 0
-                    public_ratio_calculated = 1 - private_ratio_calculated
-                    private_monthly_km = total_monthly_km * private_ratio_calculated
-                    public_monthly_km = total_monthly_km * public_ratio_calculated
 
                 st.session_state.transport_carbon_results = {
                     "total_monthly_km": total_monthly_km,
@@ -687,7 +836,7 @@ def page_test_customer():
                     "vehicle_name": vehicle_name_calc
                 }
 
-                st.session_state.single_customer_inputs = {
+                single_customer_inputs_to_save = {
                     'State': user_state,
                     'People in the household': household_size,
                     'Crisil_ESG_Score': st.session_state.crisil_esg_score_input,
@@ -702,10 +851,21 @@ def page_test_customer():
                     'Transport_People_Count': people_count_calc,
                     'Vehicle_Type': vehicle_type_calc,
                     'Vehicle_Name': vehicle_name_calc,
-                    'Private_Monthly_Km': private_monthly_km,
-                    'Public_Monthly_Km': public_monthly_km
+                    'Private_Monthly_Km': private_monthly_km, # Store calculated private km
+                    'Public_Monthly_Km': public_monthly_km, # Store calculated public km
+                    'Private_Trips_Per_Day': st.session_state.private_trips_per_day_input if transport_category == "Both Private and Public" else 0, # New
+                    'Public_Trips_Per_Day': st.session_state.public_trips_per_day_input if transport_category == "Both Private and Public" else 0  # New
                 }
+
+                # Add employee size or selected company based on analysis type
+                if st.session_state.esg_analysis_type == "Employee Range Analysis":
+                    single_customer_inputs_to_save['Employee_Size_Category_Value'] = employee_size_value_for_csv
+                elif st.session_state.esg_analysis_type == "Company-Only Analysis":
+                    single_customer_inputs_to_save['Selected_Company'] = selected_company_name_for_csv
                 
+                st.session_state.single_customer_inputs = single_customer_inputs_to_save
+                st.write(f"DEBUG: Manual Input - st.session_state.single_customer_inputs: {st.session_state.single_customer_inputs}")
+
                 submitted_data_df = pd.DataFrame([st.session_state.single_customer_inputs])
                 csv_data = submitted_data_df.to_csv(index=False).encode('utf-8')
 
@@ -721,16 +881,30 @@ def page_test_customer():
                 st.session_state.total_emissions = (emission_factor_calc * total_monthly_km) / (people_count_calc if people_count_calc > 0 else 1)
                 
                 alternatives = {vehicle_name_calc: st.session_state.total_emissions}
-                alternatives["Bus (Diesel)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["diesel"]) / (people_count_calc if people_count_calc > 0 else 1)
-                alternatives["Bus (CNG)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["cng"]) / (people_count_calc if people_count_calc > 0 else 1)
-                alternatives["Bus (Electric)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["electric"]) / (people_count_calc if people_count_calc > 0 else 1)
-                alternatives["Metro"] = (total_monthly_km * emission_factors["public_transport"]["metro"]) / (people_count_calc if people_count_calc > 0 else 1)
-                if not (vehicle_type_calc == "Four Wheeler" and people_count_calc >= 3):
-                    alternatives["Car Pooling (4 people)"] = (total_monthly_km * emission_factors["four_wheeler"]["sedan"]["petrol"]["base"] * emission_factors["four_wheeler"]["sedan"]["petrol"]["uplift"]) / 4
-                if not ("electric" in vehicle_name_calc.lower()):
-                    alternatives["Electric Car"] = (total_monthly_km * emission_factors["four_wheeler"]["sedan"]["electric"]["base"] * emission_factors["four_wheeler"]["sedan"]["electric"]["uplift"]) / (people_count_calc if people_count_calc > 0 else 1)
-                if not ("electric scooter" in vehicle_name_calc.lower()):
-                    alternatives["Electric Scooter"] = (total_monthly_km * emission_factors["two_wheeler"]["Scooter"]["electric"]["min"]) / (people_count_calc if people_count_calc > 0 else 1)
+                # Add alternatives based on total_monthly_km
+                if total_monthly_km > 0:
+                    alternatives["Bus (Diesel)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["diesel"]) / (people_count_calc if people_count_calc > 0 else 1)
+                    alternatives["Bus (CNG)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["cng"]) / (people_count_calc if people_count_calc > 0 else 1)
+                    alternatives["Bus (Electric)"] = (total_monthly_km * emission_factors["public_transport"]["bus"]["electric"]) / (people_count_calc if people_count_calc > 0 else 1)
+                    alternatives["Metro"] = (total_monthly_km * emission_factors["public_transport"]["metro"]) / (people_count_calc if people_count_calc > 0 else 1)
+                    
+                    # Carpooling alternative if private transport is used
+                    if private_monthly_km > 0 and not (vehicle_type_calc == "Four Wheeler" and people_count_calc >= 3):
+                        # Assuming a sedan petrol car for carpooling example
+                        carpool_ef = emission_factors["four_wheeler"]["sedan"]["petrol"]["base"] * emission_factors["four_wheeler"]["sedan"]["petrol"]["uplift"]
+                        alternatives["Car Pooling (4 people)"] = (private_monthly_km * carpool_ef) / 4
+                    
+                    # Electric car alternative if private transport is used and not already electric
+                    if private_monthly_km > 0 and not ("electric" in vehicle_name_calc.lower()):
+                        # Assuming a sedan electric car for alternative
+                        electric_car_ef = emission_factors["four_wheeler"]["sedan"]["electric"]["base"] * emission_factors["four_wheeler"]["sedan"]["electric"]["uplift"]
+                        alternatives["Electric Car"] = (private_monthly_km * electric_car_ef) / (people_count_calc if people_count_calc > 0 else 1)
+                    
+                    # Electric scooter alternative if private transport is used and not already electric
+                    if private_monthly_km > 0 and not ("electric scooter" in vehicle_name_calc.lower()):
+                        electric_scooter_ef = emission_factors["two_wheeler"]["Scooter"]["electric"]["min"]
+                        alternatives["Electric Scooter"] = (private_monthly_km * electric_scooter_ef) / (people_count_calc if people_count_calc > 0 else 1)
+
                 st.session_state.emissions_data = alternatives
 
 
@@ -793,7 +967,7 @@ def page_test_customer():
 
 
 def page_evaluation():
-    st.header("3. Weighted Score Settings")
+    st.header("2. Weighted Score Settings")
     st.markdown("Adjust the importance of different sustainability factors.")
 
     st.markdown("**Electricity Consumption**")
@@ -805,9 +979,10 @@ def page_evaluation():
     st.markdown(f"*(Current Total Water Weight: {w_water:.3f}, Target: 0.25)*")
 
     st.markdown("**Commute**")
+    # Display the current weights for public and private transport
     w_public = st.number_input("Public Transport Weight", value=st.session_state.weights["Public_Transport"], step=0.01, format="%.3f", key="wt_public")
     w_private = st.number_input("Private Transport Weight", value=st.session_state.weights["Private_Transport"], step=0.01, format="%.3f", key="wt_private")
-    st.markdown(f"*(Current Total Commute Weight: {w_public + w_private:.3f}, Target: 0.25)*")
+    st.markdown(f"*(Current Total Commute Weight: {w_public + w_private:.3f}, Target: 0.25)*") # This target might need adjustment if user changes individual weights
 
     st.markdown("**Company Environmental Score**")
     w_company = st.number_input("Company Environmental Score Weight", value=st.session_state.weights["Company"], step=0.01, format="%.3f", key="wt_company")
@@ -817,8 +992,8 @@ def page_evaluation():
         "Electricity_State": w_elec_total / 2, 
         "Electricity_MPCE": w_elec_total / 2,
         "Water": w_water,
-        "Public_Transport": w_public,
-        "Private_Transport": w_private,
+        "Public_Transport": w_public, # Keep these for consistency, though Z-score calculation uses fixed values
+        "Private_Transport": w_private, # Keep these for consistency, though Z-score calculation uses fixed values
         "Company": w_company
     }
     total_current_weight = sum(current_weights.values())
@@ -831,7 +1006,7 @@ def page_evaluation():
             st.session_state.weights = current_weights
             st.session_state.sub_weights = {
                 "electricity": {"total": w_elec_total}, 
-                "commute": {"public": w_public, "private": w_private},
+                "commute": {"public": w_public, "private": w_private}, # Update these based on user input
                 "water": {"water": w_water},
                 "company": {"company": w_company}
             }
@@ -907,43 +1082,43 @@ def page_reporting():
 
         customer_data = st.session_state.single_customer_inputs
 
+        # Call the unified sustainability score calculation function
+        sustainability_results = calculate_sustainability_score(
+            customer_data,
+            st.session_state.company_data,
+            st.session_state.electricity_data,
+            st.session_state.weights,
+            emission_mean,
+            emission_std
+        )
+        st.write(f"DEBUG: Manual Input - Sustainability Results: {sustainability_results}")
+
+
+        sustainability_score = sustainability_results['sustainability_score']
+        total_z_score = sustainability_results['total_z_score']
+        electricity_z = sustainability_results['electricity_z']
+        water_z = sustainability_results['water_z']
+        transport_z = sustainability_results['transport_z'] # This is now the combined transport Z-score
+        company_z = sustainability_results['company_z']
+
         user_electricity = customer_data['Electricity']
         household_size = customer_data['People in the household']
         user_state = customer_data['State']
         crisil_esg = customer_data['Crisil_ESG_Score']
         monthly_water_total = customer_data['Water_Monthly_Total']
         per_person_monthly_water = customer_data['Water_Per_Person_Monthly']
-        total_monthly_km_disp = customer_data['Km_per_month']
-        emission_factor_disp = customer_data['Transport_Emission_Factor']
+        total_monthly_km_disp = customer_data['Km_per_month'] # This is the sum of private and public km
+        emission_factor_disp = customer_data['Transport_Emission_Factor'] # This is the calculated overall emission factor for display
         people_count_disp = customer_data['Transport_People_Count']
         vehicle_name_disp = customer_data['Vehicle_Name']
         user_cost = customer_data['Electricity_Cost']
+        private_monthly_km_disp = customer_data['Private_Monthly_Km']
+        public_monthly_km_disp = customer_data['Public_Monthly_Km']
 
 
         safe_hh_size = household_size if household_size > 0 else 1
         equivalence_factor = safe_hh_size
         individual_equivalent_consumption = user_electricity / equivalence_factor if equivalence_factor > 0 else 0
-
-        temp_new_customer = {
-            'Water': per_person_monthly_water,
-            'Electricity': individual_equivalent_consumption,
-            'Private_Transport': customer_data.get('Private_Monthly_Km', 0.0),
-            'Public_Transport': customer_data.get('Public_Monthly_Km', 0.0),
-            'Company Score': crisil_esg
-        }
-
-        total_z_score = 0
-        water_z = (temp_new_customer['Water'] - 3900) / 3900
-        total_z_score += water_z * 0.25
-        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)
-        total_z_score += electricity_z * 0.25
-        private_transport_z = temp_new_customer.get('Private_Transport', 0) / 1000
-        total_z_score += private_transport_z * 0.25
-        public_transport_z = -min(1, temp_new_customer.get('Public_Transport', 0) / 500)
-        total_z_score += public_transport_z * 0.15
-        company_z = -(temp_new_customer.get('Company Score', 0) / 100)
-        total_z_score += company_z * 0.10
-        sustainability_score = 500 * (1 - np.tanh(total_z_score / 2.5))
 
         st.session_state.calculated_single_customer_score = sustainability_score
         st.session_state.calculated_single_customer_zscore = total_z_score
@@ -962,7 +1137,6 @@ def page_reporting():
                 st.info("No batch data available for percentile comparison.")
 
         st.markdown("#### Feature Breakdown (Z-Scores)")
-        transport_z = private_transport_z + public_transport_z
         feature_z_df = pd.DataFrame({
             'Feature': ['Electricity (Individual Equivalent)', 'Water', 'Transport', 'Company ESG'],
             'Z-Score': [electricity_z, water_z, transport_z, company_z] 
@@ -975,7 +1149,7 @@ def page_reporting():
             state_electricity_data = electricity_data[electricity_data['state_name'] == user_state]
 
             if not state_electricity_data.empty:
-                state_avg_elec = state_electricity_data['qty_usage_in_1month'].iloc[0] # Get the average for the state
+                state_avg_elec = state_electricity_data['qty_usage_in_1month'].mean() # Use mean for the state
                 st.metric(f"Your Monthly Individual Electricity Usage ({user_state})", f"{individual_equivalent_consumption:.2f} kWh")
                 st.metric(f"Average Monthly Individual Electricity Usage ({user_state})", f"{state_avg_elec:.2f} kWh")
 
@@ -1010,7 +1184,7 @@ def page_reporting():
                 state_hh_data = electricity_data[electricity_data['state_name'] == user_state]
                 
                 if not state_hh_data.empty:
-                    state_hh_avg = state_hh_data['hh_size'].iloc[0]
+                    state_hh_avg = state_hh_data['hh_size'].mean() # Use mean for the state
                     
                     st.markdown("#### Household Size Comparison")
                     hh_col1, hh_col2 = st.columns(2)
@@ -1097,30 +1271,29 @@ def page_reporting():
             st.metric("Emission Factor", f"{emission_factor:.4f} kg CO2/km")
             st.metric("Vehicle Used", vehicle_name)
 
-            z_score_emission = calculate_z_score_emission(emission_factor)
-            st.metric("Emission Z-Score", f"{z_score_emission:.2f}")
+            # Use the combined transport_z from calculate_sustainability_score
+            st.metric("Transport Z-Score", f"{transport_z:.2f}")
 
             st.session_state.transport_carbon_results['total_emissions'] = total_emissions_per_person
-            st.session_state.transport_carbon_results['z_score_emission'] = z_score_emission
-            st.session_state.transport_carbon_results['emission_category'] = "High" if z_score_emission > 1 else ("Average" if z_score_emission > -1 else "Low")
+            st.session_state.transport_carbon_results['z_score_emission'] = transport_z # Use the combined Z-score
+            st.session_state.transport_carbon_results['emission_category'] = "High" if transport_z > 0.5 else ("Average" if transport_z > -0.5 else "Low")
             
-            if emission_factor > 0:
-                z_score = calculate_z_score_emission(emission_factor)
+            if total_monthly_km > 0: # Check if any transport is used
                 
                 st.header("Emission Analysis")
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    st.metric("Emission Factor", f"{emission_factor:.4f} kg CO2/km")
+                    st.metric("Total Monthly Km", f"{total_monthly_km:.1f} km")
                 
                 with col2:
-                    st.metric("Z-Score", f"{z_score:.2f}")
+                    st.metric("Transport Z-Score", f"{transport_z:.2f}")
                 
                 with col3:
-                    if z_score < -1:
+                    if transport_z < -0.5: # More negative is better
                         emission_category = "Low Emissions"
                         color = "🟢"
-                    elif z_score < 1:
+                    elif transport_z < 0.5:
                         emission_category = "Average Emissions"
                         color = "🟡"
                     else:
@@ -1135,10 +1308,10 @@ def page_reporting():
                 alternatives = st.session_state.emissions_data
                 
                 st.info(f"""
-                **Z-Score Interpretation:**
-                - Your emission factor is {abs(z_score_emission):.2f} standard deviations {'above' if z_score_emission > 0 else 'below'} the average
-                - Population mean: {emission_mean:.4f} kg CO2/km
-                - Population std dev: {emission_std:.4f} kg CO2/km
+                **Z-Score Interpretation for Transport:**
+                - A more negative Z-score indicates lower emissions relative to the baseline (500 km/month).
+                - Your transport Z-score is {abs(transport_z):.2f} standard deviations {'above' if transport_z > 0 else 'below'} the average.
+                - Private transport increases Z-score (bad), public transport decreases Z-score (good).
                 """)
                 
                 recommendations = []
@@ -1150,23 +1323,24 @@ def page_reporting():
                 else:
                     recommendations.append("Your carbon footprint is relatively low, but you can still make improvements.")
                 
-                if vehicle_type == "Private Transport" and people_count == 1:
-                    recommendations.append("Consider carpooling to reduce emissions. Sharing your ride with 3 other people could reduce your emissions by up to 75%.")
+                if private_monthly_km_disp > 0 and public_monthly_km_disp == 0:
+                    recommendations.append("You are relying solely on private transport. Consider incorporating public transport for some of your commutes to reduce emissions.")
                 
-                if vehicle_type == "Combined Transport" and "Multiple Vehicles" in vehicle_name:
-                    recommendations.append("You are using multiple private vehicles in your commute, which can significantly increase your carbon footprint. Consider consolidating trips or switching to more eco-friendly options for some legs of your journey.")
+                if private_monthly_km_disp > 0 and people_count == 1:
+                    recommendations.append("Consider carpooling for your private transport to reduce emissions. Sharing your ride with others can significantly lower your per-person footprint.")
                 
                 if "petrol" in vehicle_name_disp.lower() or "diesel" in vehicle_name_disp.lower():
-                    recommendations.append("Consider switching to an electric vehicle to significantly reduce your carbon footprint.")
+                    recommendations.append("If using private transport, consider switching to an electric vehicle to significantly reduce your carbon footprint.")
                 
-                bus_emissions = (total_monthly_km_disp * emission_factors["public_transport"]["bus"]["electric"]) / (people_count_disp if people_count_disp > 0 else 1)
-                metro_emissions = (total_monthly_km_disp * emission_factors["public_transport"]["metro"]) / (people_count_disp if people_count_disp > 0 else 1)
-                
-                if total_kg > 2 * bus_emissions:
-                    recommendations.append(f"Using an electric bus could reduce your emissions by approximately {(total_kg - bus_emissions) / total_kg * 100:.1f}%.")
-                
-                if total_kg > 2 * metro_emissions:
-                    recommendations.append(f"Using metro could reduce your emissions by approximately {(total_kg - metro_emissions) / total_kg * 100:.1f}%.")
+                if total_monthly_km > 0: # Only suggest public transport alternatives if there's actual travel
+                    bus_emissions = (total_monthly_km * emission_factors["public_transport"]["bus"]["electric"]) / (people_count_disp if people_count_disp > 0 else 1)
+                    metro_emissions = (total_monthly_km * emission_factors["public_transport"]["metro"]) / (people_count_disp if people_count_disp > 0 else 1)
+                    
+                    if total_kg > 2 * bus_emissions:
+                        recommendations.append(f"Using an electric bus for your commute could reduce your emissions by approximately {(total_kg - bus_emissions) / total_kg * 100:.1f}%.")
+                    
+                    if total_kg > 2 * metro_emissions:
+                        recommendations.append(f"Using metro for your commute could reduce your emissions by approximately {(total_kg - metro_emissions) / total_kg * 100:.1f}%.")
                 
                 st.session_state.recommendations = recommendations
                 
@@ -1252,41 +1426,7 @@ def page_reporting():
         else:
             st.info("No transport carbon footprint data available. Please complete the input on the '1. New Customer Assessment' page.")
 
-        z_vals = {}
-        inverse_scoring = False
-
-        z_score = 0
-        
-        water_z = (temp_new_customer['Water'] - 3900) / 3900
-        z_score += water_z * 0.25
-        
-        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)  
-        z_score += electricity_z * 0.25
-        
-        private_transport_z = temp_new_customer.get('Private_Transport', 0) / 1000  
-        z_score += private_transport_z * 0.25
-        
-        public_transport_z = -min(1, temp_new_customer.get('Public_Transport', 0) / 500) 
-        z_score += public_transport_z * 0.15
-        
-        company_z = -(temp_new_customer.get('Company Score', 0) / 100)  
-        z_score += company_z * 0.10
-        
-        sust_score = 500 * (1 - np.tanh(z_score/2.5))
-
-        norm_vals = {}
-        for feat, val in temp_new_customer.items():
-            if feat in z_vals:  
-                cmin, cmax = (0, 1000)
-                if cmax == cmin:
-                    norm_vals[feat] = 1
-                else:
-                    if inverse_scoring:
-                        norm_vals[feat] = ((cmax - val)/(cmax - cmin))*999 + 1
-                    else:
-                        norm_vals[feat] = ((val - cmin)/(cmax - cmin))*999 + 1
-
-        
+        # Display customer score results using the calculated values
         st.markdown("---")
         st.markdown("### Customer Score Results")
         
@@ -1352,16 +1492,16 @@ def page_reporting():
                         score_source = "Custom Input"
             st.metric("Company Environment Score",f"{display_score:.2f}", help=f"Score {score_source}")
 
-            st.metric("Water Usage", f"{temp_new_customer.get('Water', 0):.2f}")
-            st.metric("Public Transport", f"{temp_new_customer.get('Public_Transport', 0):.2f}")
-            st.metric("Private Transport", f"{temp_new_customer.get('Private_Transport', 0):.2f}")
+            st.metric("Water Usage", f"{per_person_monthly_water:.2f}") # Use the actual per person water
+            st.metric("Public Transport (Km/month)", f"{customer_data.get('Public_Monthly_Km', 0):.2f}")
+            st.metric("Private Transport (Km/month)", f"{customer_data.get('Private_Monthly_Km', 0):.2f}")
             
-            st.metric("Z-Score", f"{z_score:.2f}")
-            st.metric("Sustainability Score", f"{sust_score:.2f}")
+            st.metric("Z-Score", f"{total_z_score:.2f}")
+            st.metric("Sustainability Score", f"{sustainability_score:.2f}")
 
             if 'scored_data' in st.session_state and 'Sustainability_Score' in st.session_state.scored_data:
                 existing = st.session_state.scored_data["Sustainability_Score"]
-                sust_rank = (existing > sust_score).sum() + 1
+                sust_rank = (existing > sustainability_score).sum() + 1
             else:
                 sust_rank = 1
 
@@ -1370,28 +1510,28 @@ def page_reporting():
 
             if 'scored_data' in st.session_state and 'Sustainability_Score' in st.session_state.scored_data.columns:
                 existing_sust = st.session_state.scored_data['Sustainability_Score']
-                better_than = (existing_sust < sust_score).mean() * 100
+                better_than = (existing_sust < sustainability_score).mean() * 100
                 st.success(f"This customer performs better than **{better_than:.1f}%** of customers in the dataset (based on Z-Score)")
             else:
                 st.info("No comparison data available in the dataset.")
 
-            z_description = "above" if z_score > 0 else "below"
-            st.info(f"Performance: **{abs(z_score):.2f} SD {z_description} mean**")
+            z_description = "above" if total_z_score > 0 else "below"
+            st.info(f"Performance: **{abs(total_z_score):.2f} SD {z_description} mean**")
         
         with col2:
             pie_chart_data = {}
 
-            if temp_new_customer['Electricity'] > 0:
-                pie_chart_data['Personal Electricity Usage (kWh)'] = temp_new_customer['Electricity']
-            if temp_new_customer['Water'] > 0:
-                pie_chart_data['Water Usage (L/person/month)'] = temp_new_customer['Water']
-            if temp_new_customer['Company Score'] > 0:
-                pie_chart_data['Company Score'] = temp_new_customer['Company Score']
+            if individual_equivalent_consumption > 0:
+                pie_chart_data['Personal Electricity Usage (kWh)'] = individual_equivalent_consumption
+            if per_person_monthly_water > 0:
+                pie_chart_data['Water Usage (L/person/month)'] = per_person_monthly_water
+            if crisil_esg > 0:
+                pie_chart_data['Company Score'] = crisil_esg
 
-            if temp_new_customer['Private_Transport'] > 0:
-                pie_chart_data['Private Transport (Km/month)'] = temp_new_customer['Private_Transport']
-            if temp_new_customer['Public_Transport'] > 0:
-                pie_chart_data['Public Transport (Km/month)'] = temp_new_customer['Public_Transport']
+            if customer_data.get('Private_Monthly_Km', 0) > 0:
+                pie_chart_data['Private Transport (Km/month)'] = customer_data.get('Private_Monthly_Km', 0)
+            if customer_data.get('Public_Monthly_Km', 0) > 0:
+                pie_chart_data['Public Transport (Km/month)'] = customer_data.get('Public_Monthly_Km', 0)
             
             active_pie_features = {k: v for k, v in pie_chart_data.items() if v > 0}
 
@@ -1486,19 +1626,19 @@ def page_reporting():
                                 if not company_row_filtered.empty:
                                     company_data_row = company_row_filtered.iloc[0]
                                     company_score = company_data_row['Environment_Score']
-                                    company_z = company_data_row['Env_Z_Score']
+                                    company_z_display = (company_score - baseline_mean) / baseline_std if baseline_std > 0 else 0
                                     company_norm = company_data_row['Normalized_Score']
 
                                     col1, col2, col3 = st.columns(3)
                                     with col1:
                                         st.metric("Environment Score", f"{company_score:.2f}")
                                     with col2:
-                                        st.metric("Z-Score", f"{company_z:.2f}",
-                                                f"{company_z:.2f} SD from mean")
+                                        st.metric("Z-Score", f"{company_z_display:.2f}",
+                                                f"{company_z_display:.2f} SD from mean")
                                     with col3:
                                         st.metric("Normalized Score", f"{company_norm:.2f}/100")
 
-                                    better_than = (df_results['Env_Z_Score'] < company_z).mean() * 100
+                                    better_than = (df_results['Env_Z_Score'] < company_z_display).mean() * 100
                                     st.success(f"**{selected_company_for_comparison}** performs better than **{better_than:.1f}%** of companies in this segment (based on Z-Score)")
                                 else:
                                     st.warning(f"Selected company '{selected_company_for_comparison}' not found in the filtered dataset (Industry: {selected_esg_industry}, Employee Size: {selected_esg_emp_size}). Please ensure the company name matches exactly or check for case sensitivity.")
@@ -1538,22 +1678,22 @@ def page_reporting():
                             custom_score = st.session_state.get('crisil_esg_score_input', 0.0)
                             
                             if baseline_std > 0:
-                                custom_z = (custom_score - baseline_mean) / baseline_std
+                                custom_z_display = (custom_score - baseline_mean) / baseline_std
                             else:
-                                custom_z = 0
+                                custom_z_display = 0
 
-                            custom_norm = ((custom_z - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 0
+                            custom_norm = ((custom_z_display - min_z) / (max_z - min_z)) * 100 if (max_z - min_z) != 0 else 0
                             
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("Environment Score", f"{custom_score:.2f}")
                             with col2:
-                                st.metric("Z-Score", f"{custom_z:.2f}",
-                                        f"{custom_z:.2f} SD from mean")
+                                st.metric("Z-Score", f"{custom_z_display:.2f}",
+                                        f"{custom_z_display:.2f} SD from mean")
                             with col3:
                                 st.metric("Normalized Score", f"{custom_norm:.2f}/100")
 
-                            better_than = (df_results['Env_Z_Score'] < custom_z).mean() * 100
+                            better_than = (df_results['Env_Z_Score'] < custom_z_display).mean() * 100
                             st.success(f"Your company performs better than **{better_than:.1f}%** of companies in this segment (based on Z-Score)")
                     else:
                         st.warning(f"No companies found in {selected_esg_industry} sector with {emp_range_text} employees to show comparison.")
@@ -1577,7 +1717,7 @@ def page_reporting():
                             company_sector = company_row.get('Sector_classification', 'N/A')
                             company_employees = company_row.get('Total_Employees', 'N/A')
 
-                            company_z = (company_score - overall_mean) / overall_std
+                            company_z_display = (company_score - overall_mean) / overall_std if overall_std > 0 else 0
                             percentile = (company_data['Environment_Score'] < company_score).mean() * 100
                             st.markdown(f"### {selected_company_for_comparison}")
                             col1, col2, col3 = st.columns(3)
@@ -1590,13 +1730,13 @@ def page_reporting():
 
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                z_description = "above" if company_z > 0 else "below"
+                                z_description = "above" if company_z_display > 0 else "below"
                                 st.metric("Z-Score",
-                                        f"{company_z:.2f}",
-                                        f"{abs(company_z):.2f} SD {z_description} mean")
+                                        f"{company_z_display:.2f}",
+                                        f"{abs(company_z_display):.2f} SD from mean")
                             with col2:
-                                perf_description = "outperforms" if company_z > 0 else "underperforms"
-                                st.metric("Performance", f"{perf_description} by {abs(company_z):.2f} SD")
+                                perf_description = "outperforms" if company_z_display > 0 else "underperforms"
+                                st.metric("Performance", f"{perf_description} by {abs(company_z_display):.2f} SD")
                             with col3:
                                 st.metric("Percentile", f"{percentile:.1f}%")
 
@@ -1604,7 +1744,7 @@ def page_reporting():
                             sns.histplot(company_data['Environment_Score'], kde=True, ax=ax)
                             ax.axvline(overall_mean, color='red', linestyle='--', label=f'Mean ({overall_mean:.2f})')
                             ax.axvline(company_score, color='blue', linestyle='-',
-                                    label=f'{selected_company_for_comparison} ({company_score:.2f}, Z={company_z:.2f})')
+                                    label=f'{selected_company_for_comparison} ({company_score:.2f}, Z={company_z_display:.2f})')
                             ax.set_xlabel('Environment Score')
                             ax.set_title(f'Distribution of Environment Scores Across All Companies')
                             ax.legend()
@@ -1613,7 +1753,7 @@ def page_reporting():
                             sector_data = company_data[company_data['Sector_classification'] == company_sector]
                             sector_mean = sector_data['Environment_Score'].mean()
                             sector_std = sector_data['Environment_Score'].std(ddof=1)
-                            sector_z = (company_score - sector_mean) / sector_std
+                            sector_z_display = (company_score - sector_mean) / sector_std if sector_std > 0 else 0
                             sector_percentile = (sector_data['Environment_Score'] < company_score).mean() * 100
 
                             st.markdown(f"### Comparison with {company_sector} Sector")
@@ -1621,20 +1761,20 @@ def page_reporting():
 
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                z_description = "above" if sector_z > 0 else "below"
+                                z_description = "above" if sector_z_display > 0 else "below"
                                 st.metric("Sector Z-Score",
-                                        f"{sector_z:.2f}",
-                                        f"{abs(sector_z):.2f} SD {z_description} sector mean")
+                                        f"{sector_z_display:.2f}",
+                                        f"{abs(sector_z_display):.2f} SD {z_description} sector mean")
                             with col2:
-                                perf_description = "outperforms" if sector_z > 0 else "underperforms"
-                                st.metric("Sector Performance", f"{perf_description} by {abs(sector_z):.2f} SD")
+                                perf_description = "outperforms" if sector_z_display > 0 else "underperforms"
+                                st.metric("Sector Performance", f"{perf_description} by {abs(sector_z_display):.2f} SD")
                             with col3:
                                 st.metric("Sector Percentile", f"{sector_percentile:.1f}%")
 
                             st.markdown(f"### All Performers in {company_sector} (Highest to Lowest)")
 
                             all_sector_companies = sector_data.copy()
-                            all_sector_companies['Sector_Z_Score'] = (all_sector_companies['Environment_Score'] - sector_mean) / sector_std
+                            all_sector_companies['Sector_Z_Score'] = (all_sector_companies['Environment_Score'] - sector_mean) / sector_std if sector_std > 0 else 0
                             all_sector_companies = all_sector_companies.sort_values('Environment_Score', ascending=False)
 
                             display_df = all_sector_companies[[
@@ -1663,21 +1803,21 @@ def page_reporting():
                     if isinstance(custom_score, (int, float)):
                         
                         if overall_std > 0:
-                            custom_z = (custom_score - overall_mean) / overall_std
+                            custom_z_display = (custom_score - overall_mean) / overall_std
                         else:
-                            custom_z = 0.0
+                            custom_z_display = 0.0
                         
                         percentile = (company_data['Environment_Score'] < custom_score).mean() * 100
 
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            z_description = "above" if custom_z > 0 else "below"
+                            z_description = "above" if custom_z_display > 0 else "below"
                             st.metric("Z-Score",
-                                    f"{custom_z:.2f}",
-                                    f"{abs(custom_z):.2f} SD {z_description} mean")
+                                    f"{custom_z_display:.2f}",
+                                    f"{abs(custom_z_display):.2f} SD {z_description} mean")
                         with col2:
-                            perf_description = "outperforms" if custom_z > 0 else "underperforms"
-                            st.metric("Performance", f"{perf_description} by {abs(custom_z):.2f} SD")
+                            perf_description = "outperforms" if custom_z_display > 0 else "underperforms"
+                            st.metric("Performance", f"{perf_description} by {abs(custom_z_display):.2f} SD")
                         with col3:
                             st.metric("Percentile", f"{percentile:.1f}%")
 
@@ -1686,7 +1826,7 @@ def page_reporting():
                         ax.axvline(overall_mean, color='red', linestyle='--', label=f'Mean ({overall_mean:.2f})')
                         
                         ax.axvline(custom_score, color='blue', linestyle='-',
-                                label=f'Your Company ({custom_score:.2f}, Z={custom_z:.2f})')
+                                label=f'Your Company ({custom_score:.2f}, Z={custom_z_display:.2f})')
                         
                         ax.set_xlabel('Environment Score')
                         ax.set_title(f'Distribution of Environment Scores Across All Companies')
@@ -1701,7 +1841,7 @@ def page_reporting():
                         sector_data = company_data[company_data['Sector_classification'] == selected_sector_for_comparison]
                         sector_mean = sector_data['Environment_Score'].mean()
                         sector_std = sector_data['Environment_Score'].std(ddof=1)
-                        sector_z = (custom_score - sector_mean) / sector_std
+                        sector_z_display = (custom_score - sector_mean) / sector_std if sector_std > 0 else 0
                         sector_percentile = (sector_data['Environment_Score'] < custom_score).mean() * 100
 
                         st.markdown(f"### Comparison with {selected_sector_for_comparison} Sector")
@@ -1709,18 +1849,18 @@ def page_reporting():
 
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            z_description = "above" if sector_z > 0 else "below"
+                            z_description = "above" if sector_z_display > 0 else "below"
                             st.metric("Sector Z-Score",
-                                    f"{sector_z:.2f}",
-                                    f"{abs(sector_z):.2f} SD {z_description} sector mean")
+                                    f"{sector_z_display:.2f}",
+                                    f"{abs(sector_z_display):.2f} SD {z_description} sector mean")
                         with col2:
-                            perf_description = "outperforms" if sector_z > 0 else "underperforms"
-                            st.metric("Sector Performance", f"{perf_description} by {abs(sector_z):.2f} SD")
+                            perf_description = "outperforms" if sector_z_display > 0 else "underperforms"
+                            st.metric("Sector Performance", f"{perf_description} by {abs(sector_z_display):.2f} SD")
                         with col3:
                             st.metric("Sector Percentile", f"{sector_percentile:.1f}%")
 
                         all_sector_companies = sector_data.copy()
-                        all_sector_companies['Sector_Z_Score'] = (all_sector_companies['Environment_Score'] - sector_mean) / sector_std
+                        all_sector_companies['Sector_Z_Score'] = (all_sector_companies['Environment_Score'] - sector_mean) / sector_std if sector_std > 0 else 0
                         all_sector_companies = all_sector_companies.sort_values('Environment_Score', ascending=False)
 
                         st.markdown(f"### All Performers in {selected_sector_for_comparison} (Highest to Lowest)")
@@ -1732,7 +1872,29 @@ def page_reporting():
                             'ESG_Rating',
                             'Total_Employees'
                         ]].reset_index(drop=True)
-                        st.dataframe(display_df)
+
+                            # Highlight the custom score if it falls within the displayed companies
+                        if custom_score is not None:
+                            # Create a dummy row for custom score to find its rank
+                            dummy_row = pd.DataFrame([{
+                                'Company_Name': 'Your Custom Score',
+                                'Environment_Score': custom_score,
+                                'Sector_Z_Score': sector_z_display,
+                                'ESG_Rating': 'N/A',
+                                'Total_Employees': 'N/A'
+                            }])
+                            display_df = pd.concat([display_df, dummy_row], ignore_index=True)
+                            display_df = display_df.sort_values('Environment_Score', ascending=False).reset_index(drop=True)
+                            selected_idx = display_df.index[display_df['Company_Name'] == 'Your Custom Score'].tolist()
+
+                            styled_df = display_df.style.apply(
+                                lambda x: ['background-color: lightskyblue' if i in selected_idx else ''
+                                        for i in range(len(display_df))],
+                                axis=0
+                            )
+                            st.dataframe(styled_df)
+                        else:
+                            st.dataframe(display_df)
         else:
             st.info("Company data unavailable for ESG comparison visualizations.")
 
@@ -1752,6 +1914,8 @@ def page_reporting():
                             current_customer_df['Electricity'] = st.session_state.single_customer_inputs['Electricity']
                             current_customer_df['Water'] = st.session_state.single_customer_inputs['Water_Monthly_Total']
                             current_customer_df['Crisil_ESG_Score'] = st.session_state.single_customer_inputs['Crisil_ESG_Score']
+                            current_customer_df['Private_Monthly_Km'] = st.session_state.single_customer_inputs['Private_Monthly_Km']
+                            current_customer_df['Public_Monthly_Km'] = st.session_state.single_customer_inputs['Public_Monthly_Km']
 
                             scored_df = current_customer_df
 
@@ -1808,6 +1972,8 @@ def page_reporting():
 
 
                 for idx, row in test_df.iterrows():
+                    st.write(f"--- DEBUG: Processing Bulk Row {idx} ---")
+                    st.write(f"DEBUG: Raw row data: {row.to_dict()}")
                     try:
                         total_electricity_kwh = float(row.get("Electricity", 0.0)) if row.get("Electricity") is not None else 0.0
                         household_count = int(row.get("People in the household", 1)) if not pd.isna(row.get("People in the household")) else 1
@@ -1816,115 +1982,123 @@ def page_reporting():
                         
                         individual_electricity_kwh = total_electricity_kwh / divisor if divisor > 0 else total_electricity_kwh
                         
-                        water_input_type = str(row.get("Water (Monthly or Daily)", "monthly")).strip().lower()
-                        water_value = float(row.get("Water (Monthly or Daily) Value", 0.0)) if not pd.isna(row.get("Water (Monthly or Daily) Value")) else 0.0
+                        # FIX: Corrected column names for Water_Usage_Type and Water_Value
+                        water_input_type = str(row.get("Water_Usage_Type", "monthly")).strip().lower()
+                        water_value_raw = row.get("Water_Value")
                         
-                        if water_input_type == "daily":
-                            total_water_liters = water_value * 30 * household_count
+                        try:
+                            water_value = float(water_value_raw)
+                        except (ValueError, TypeError):
+                            water_value = 0.0 # Default to 0 if conversion fails (e.g., empty string, None, non-numeric)
+
+                        st.write(f"DEBUG: Row {idx} - Raw Water Value: {water_value_raw}, Parsed Water Value: {water_value}")
+                        st.write(f"DEBUG: Row {idx} - Water Input Type: {water_input_type}, Household Count: {household_count}")
+
+                        # FIX: Corrected water calculation for 'daily' type in bulk processing
+                        if water_input_type == "daily usage": # Ensure this matches the exact string from CSV if applicable
+                            total_water_liters = water_value * 30 * household_count # Added * 30
                         else:
                             total_water_liters = water_value * household_count
+                        
+                        st.write(f"DEBUG: Row {idx} - Total Water Liters: {total_water_liters}")
 
-                        state_name_raw = str(row.get("State/UT", "")).strip().lower()
-                        rural_urban_raw = str(row.get("Rural/Urban", "rural")).strip().lower()
-                        user_sector = 1 if rural_urban_raw == 'rural' else 2
+                        per_person_monthly_water_calc = total_water_liters / (household_count if household_count > 0 else 1)
+                        st.write(f"DEBUG: Row {idx} - Per Person Monthly Water Calc: {per_person_monthly_water_calc}")
 
-                        vehicle_type_csv = str(row.get("Vehicle (Drop Down)", row.get("Vehicle", ""))).strip()
-                        engine_fuel_csv = str(row.get("Engine (Drop Down)", "")).strip()
-                        km_per_month_csv = float(row.get("Km_per_month", 0.0)) if not pd.isna(row.get("Km_per_month")) else 0.0
+
+                        # Re-introduce logic to calculate total_monthly_km from CSV
+                        distance_csv = float(row.get("Km_per_month", 0.0)) if not pd.isna(row.get("Km_per_month")) else 0.0
+                        # The CSV template has Km_per_month directly, not distance, days, weeks
+                        total_monthly_km_csv = distance_csv # Use Km_per_month directly from CSV
+
+                        transport_category_csv = str(row.get("Vehicle_Type", "Private Transport")).strip() # Use Vehicle_Type from CSV
+                        
+                        # Ensure Private_Monthly_Km and Public_Monthly_Km are correctly read as floats
+                        private_monthly_km_csv = pd.to_numeric(row.get("Private_Monthly_Km", 0.0), errors='coerce')
+                        public_monthly_km_csv = pd.to_numeric(row.get("Public_Monthly_Km", 0.0), errors='coerce')
+
+                        # New: Read private and public trips per day from CSV for bulk processing
+                        private_trips_per_day_csv = int(row.get("Private_Trips_Per_Day", 0)) if not pd.isna(row.get("Private_Trips_Per_Day")) else 0
+                        public_trips_per_day_csv = int(row.get("Public_Trips_Per_Day", 0)) if not pd.isna(row.get("Public_Trips_Per_Day")) else 0
+
+
+                        # Replace NaN with 0.0 if coercion failed
+                        private_monthly_km_csv = private_monthly_km_csv if not pd.isna(private_monthly_km_csv) else 0.0
+                        public_monthly_km_csv = public_monthly_km_csv if not pd.isna(public_monthly_km_csv) else 0.0
+
                         crisil_esg_csv = float(row.get("Crisil_ESG_Score", 0.0)) if not pd.isna(row.get("Crisil_ESG_Score")) else 0.0
-                        company_sector_csv = str(row.get("Industry (Sector_classification)", "")) if not pd.isna(row.get("Industry (Sector_classification)")) else ""
-                        num_employees_csv = int(row.get("Number of Employees", None)) if not pd.isna(row.get("Number of Employees")) else None
+                        company_sector_csv = str(row.get("Sector_classification", "")) if not pd.isna(row.get("Sector_classification")) else "" # Use Sector_classification from CSV
+                        num_employees_csv = int(row.get("Total_Employees", None)) if not pd.isna(row.get("Total_Employees")) else None # Use Total_Employees from CSV
 
                         commute_emission_calc = 0.0
-                        chosen_ef = 0.0
-                        if vehicle_type_csv.lower() in ["two_wheeler", "2 wheeler", "three_wheeler", "four_wheeler", "public_transport"]:
-                            if vehicle_type_csv.lower() == "two_wheeler" or vehicle_type_csv.lower() == "2 wheeler":
-                                category_2w = row.get("Two_Wheeler_Category", "Scooter")
-                                if category_2w in emission_factors_transport["two_wheeler"] and engine_fuel_csv in emission_factors_transport["two_wheeler"][category_2w]:
-                                    ef_min = emission_factors_transport["two_wheeler"][category_2w][engine_fuel_csv]["min"]
-                                    ef_max = emission_factors_transport["two_wheeler"][category_2w][engine_fuel_csv]["max"]
-                                    chosen_ef = (ef_min + ef_max) / 2
-                            elif vehicle_type_csv.lower() == "three_wheeler":
-                                if engine_fuel_csv in emission_factors_transport["three_wheeler"]:
-                                    ef_min = emission_factors_transport["three_wheeler"][engine_fuel_csv]["min"]
-                                    ef_max = emission_factors_transport["three_wheeler"][engine_fuel_csv]["max"]
-                                    chosen_ef = (ef_min + ef_max) / 2
-                            elif vehicle_type_csv.lower() == "four_wheeler":
-                                car_type_4w = row.get("Four_Wheeler_Type", "sedan")
-                                if car_type_4w in emission_factors_transport["four_wheeler"] and engine_fuel_csv in emission_factors_transport["four_wheeler"][car_type_4w]:
-                                    base = emission_factors_transport["four_wheeler"][car_type_4w][engine_fuel_csv]["base"]
-                                    uplift = emission_factors_transport["four_wheeler"][car_type_4w][engine_fuel_csv]["uplift"]
-                                    chosen_ef = base * uplift
-                            
-                            elif vehicle_type_csv.lower() == "public_transport":
-                                public_mode_csv = row.get("Public_Transport_Mode", "metro")
-                                
-                                if public_mode_csv == "taxi":
-                                    taxi_type_csv = row.get("Taxi_Car_Type", "sedan")
-                                    taxi_fuel_csv = row.get("Taxi_Fuel_Type", "petrol")
-                                    if taxi_type_csv in emission_factors_transport["public_transport"]["taxi"] and taxi_fuel_csv in emission_factors_transport["public_transport"]["taxi"][taxi_type_csv]:
-                                        base = emission_factors_transport["public_transport"]["taxi"][taxi_type_csv][taxi_fuel_csv]["base"]
-                                        uplift = emission_factors_transport["public_transport"]["taxi"][taxi_type_csv][taxi_fuel_csv]["uplift"]
-                                        chosen_ef = base * uplift
-                                    else:
-                                        chosen_ef = 0.05 # Fallback
-                                elif public_mode_csv == "metro":
-                                    chosen_ef = emission_factors_transport["public_transport"]["metro"]
-                                elif public_mode_csv == "bus":
-                                    bus_details = emission_factors_transport["public_transport"]["bus"]
-                                    chosen_ef = bus_details.get(engine_fuel_csv, bus_details["diesel"])
-                                else:
-                                    chosen_ef = emission_factors_transport["public_transport"]["base_emission"]
-                            
-                        commute_emission_calc = chosen_ef
-
                         
-
-                        electricity_z_score = (individual_electricity_kwh - global_electricity_mean) / global_electricity_std if global_electricity_std > 0 else 0
-                        electricity_z_score = np.clip(electricity_z_score, -3, 3) # Cap between -3 and 3
-
-
-                        average_monthly_per_person_water_batch = 130 * 30 # Baseline: 130 liters/day * 30 days
-                        water_z_score_batch = (total_water_liters / (household_count if household_count > 0 else 1) - average_monthly_per_person_water_batch) / average_monthly_per_person_water_batch if average_monthly_per_person_water_batch > 0 else 0
-                        water_z_score_batch = np.clip(water_z_score_batch, -3, 3)
-
-                        monthly_co2_emissions_batch = (commute_emission_calc * km_per_month_csv)
-                        avg_commute_emissions_batch = 50 # Example baseline
-                        commute_z_score_batch = (monthly_co2_emissions_batch - avg_commute_emissions_batch) / avg_commute_emissions_batch if avg_commute_emissions_batch > 0 else 0
-                        commute_z_score_batch = np.clip(commute_z_score_batch, -3, 3)
-
-
-                        crisil_z_score_batch = 0
-                        if st.session_state.company_data is not None and not st.session_state.company_data.empty and 'Environment_Score' in st.session_state.company_data.columns:
-                            comp_mean_batch = st.session_state.company_data['Environment_Score'].mean()
-                            comp_std_batch = st.session_state.company_data['Environment_Score'].std()
-                            crisil_z_score_batch = -(crisil_esg_csv - comp_mean_batch) / comp_std_batch if comp_std_batch > 0 else 0
+                        # Logic to calculate emission_factor_calc for bulk, similar to single customer
+                        # For bulk, we'll use the Transport_Emission_Factor directly if available, otherwise calculate a default
+                        transport_emission_factor_from_csv = float(row.get("Transport_Emission_Factor", 0.0)) if not pd.isna(row.get("Transport_Emission_Factor")) else 0.0
+                        if transport_emission_factor_from_csv > 0:
+                            commute_emission_calc = transport_emission_factor_from_csv
                         else:
-                            crisil_z_score_batch = -(crisil_esg_csv - 70) / 15 # Fixed fallback
-                        crisil_z_score_batch = np.clip(crisil_z_score_batch, -3, 3)
+                            # Fallback calculation if Transport_Emission_Factor is not provided in CSV
+                            if transport_category_csv == "Private Transport":
+                                # Default to a common private vehicle like Scooter (petrol, 150cc)
+                                commute_emission_calc = emission_factors["two_wheeler"]["Scooter"]["petrol"]["min"] 
+                            elif transport_category_csv == "Public Transport":
+                                # Default to Metro as a common public transport
+                                commute_emission_calc = emission_factors["public_transport"]["metro"]
+                            elif transport_category_csv == "Both Private and Public":
+                                # Recalculate ratios for combined transport based on new trip inputs from CSV
+                                total_trips_per_day_csv = private_trips_per_day_csv + public_trips_per_day_csv
+                                if total_trips_per_day_csv > 0:
+                                    private_ratio_csv = private_trips_per_day_csv / total_trips_per_day_csv
+                                    public_ratio_csv = public_trips_per_day_csv / total_trips_per_day_csv
+                                else:
+                                    private_ratio_csv = 0.0
+                                    public_ratio_csv = 0.0
 
+                                # Use default emission factors for combined if not specified in CSV
+                                private_ef_for_combined_csv = emission_factors["two_wheeler"]["Scooter"]["petrol"]["min"] # Default private
+                                public_ef_for_combined_csv = emission_factors["public_transport"]["metro"] # Default public
 
-                        weights_bulk = st.session_state.weights 
-                        total_electricity_weight = weights_bulk["Electricity_State"] + weights_bulk["Electricity_MPCE"]
-                        
-                        total_z_score_batch = (
-                            crisil_z_score_batch * weights_bulk["Company"] +
-                            water_z_score_batch * weights_bulk["Water"] +
-                            electricity_z_score * total_electricity_weight + # Using the new single z-score
-                            (commute_z_score_batch * (weights_bulk["Public_Transport"] + weights_bulk["Private_Transport"]))
+                                commute_emission_calc = (private_ef_for_combined_csv * private_ratio_csv) + \
+                                                        (public_ef_for_combined_csv * public_ratio_csv)
+                            else:
+                                commute_emission_calc = 0.0 # No transport or unknown category
+
+                        # Prepare customer data dict for the unified function
+                        customer_data_for_bulk = {
+                            'Electricity': total_electricity_kwh,
+                            'People in the household': household_count,
+                            'Crisil_ESG_Score': crisil_esg_csv,
+                            'Water_Per_Person_Monthly': per_person_monthly_water_calc,
+                            'Km_per_month': total_monthly_km_csv, # Total for display
+                            'Transport_Emission_Factor': commute_emission_calc, # Overall for display
+                            'Transport_People_Count': 1, # Assuming 1 person for bulk for now, adjust if CSV has this
+                            'Private_Monthly_Km': private_monthly_km_csv, # Pass calculated private km
+                            'Public_Monthly_Km': public_monthly_km_csv # Pass calculated public km
+                        }
+
+                        # Call the unified sustainability score calculation function for each row
+                        bulk_sustainability_results = calculate_sustainability_score(
+                            customer_data_for_bulk,
+                            st.session_state.company_data,
+                            st.session_state.electricity_data,
+                            st.session_state.weights,
+                            emission_mean,
+                            emission_std
                         )
-
-                        sustainability_score_batch = 500 * (1 - np.tanh(total_z_score_batch / 2.5))
+                        st.write(f"DEBUG: Row {idx} - Bulk Sustainability Results: {bulk_sustainability_results}")
 
 
                         result = row.to_dict()
                         result.update({
-                            "Electricity_Z": electricity_z_score, # Using the new individual Z-score
-                            "Water_Z": water_z_score_batch,
-                            "Commute_Z": commute_z_score_batch,
-                            "Company_Z": crisil_z_score_batch,
-                            "Z_Total": total_z_score_batch,
-                            "Sustainability_Score": sustainability_score_batch
+                            "Electricity_Z": bulk_sustainability_results['electricity_z'],
+                            "Water_Z": bulk_sustainability_results['water_z'],
+                            "Commute_Z": bulk_sustainability_results['transport_z'], # This is now the combined transport Z-score
+                            "Company_Z": bulk_sustainability_results['company_z'],
+                            "Z_Total": bulk_sustainability_results['total_z_score'],
+                            "Sustainability_Score": bulk_sustainability_results['sustainability_score'],
+                            "Private_Trips_Per_Day": private_trips_per_day_csv, # New
+                            "Public_Trips_Per_Day": public_trips_per_day_csv # New
                         })
                         test_with_scores.append(result)
 
@@ -1980,50 +2154,49 @@ def page_reporting():
 
                 col9, col10, col11, col12 = st.columns(4)
                 with col9:
-                    avg_electricity = results_df['Electricity'].mean()
+                    avg_electricity = pd.to_numeric(results_df['Electricity'], errors='coerce').mean()
                     st.metric("Avg Electricity (kWh)", f"{avg_electricity:.1f}")
                 with col10:
-                    if 'Number of Employees' in results_df.columns:
-                        avg_employees = results_df['Number of Employees'].mean()
+                    if 'Total_Employees' in results_df.columns: # Use Total_Employees from CSV
+                        avg_employees = pd.to_numeric(results_df['Total_Employees'], errors='coerce').mean()
                         st.metric("Avg Employees", f"{avg_employees:.0f}")
                     else:
-                        st.info("No 'Number of Employees' data in bulk upload.")
+                        st.info("No 'Total_Employees' data in bulk upload.")
                 with col11:
-                    avg_esg = results_df['Crisil_ESG_Score'].mean()
+                    avg_esg = pd.to_numeric(results_df['Crisil_ESG_Score'], errors='coerce').mean()
                     st.metric("Avg ESG Score", f"{avg_esg:.1f}")
                 with col12:
                     if 'Km_per_month' in results_df.columns:
-                        avg_km = results_df['Km_per_month'].mean()
+                        avg_km = pd.to_numeric(results_df['Km_per_month'], errors='coerce').mean()
                         st.metric("Avg Km/Month", f"{avg_km:.0f}")
                     else:
                         st.info("No 'Km_per_month' data in bulk upload.")
 
                 col13, col14, col15, col16 = st.columns(4)
                 with col13:
-                    if 'Engine (Drop Down)' in results_df.columns:
-                        electric_vehicles = len(results_df[results_df['Engine (Drop Down)'] == 'electric'])
-                        electric_pct = (electric_vehicles / total_customers * 100) if total_customers > 0 else 0
-                        st.metric("Electric Vehicles", f"{electric_vehicles} ({electric_pct:.1f}%)")
+                    if 'Vehicle_Name' in results_df.columns: # Check for Vehicle_Name to infer electric vehicles
+                        electric_vehicles_count = len(results_df[results_df['Vehicle_Name'].astype(str).str.contains('electric', case=False, na=False)])
+                        electric_pct = (electric_vehicles_count / total_customers * 100) if total_customers > 0 else 0
+                        st.metric("Electric Vehicles", f"{electric_vehicles_count} ({electric_pct:.1f}%)")
                     else:
-                        st.info("No 'Engine (Drop Down)' data in bulk upload.")
+                        st.info("No 'Vehicle_Name' data to infer electric vehicles in bulk upload.")
                 with col14:
-                    if 'Rural/Urban' in results_df.columns:
-                        urban_customers = len(results_df[results_df['Rural/Urban'] == 'urban'])
-                        urban_pct = (urban_customers / total_customers * 100) if total_customers > 0 else 0
-                        st.metric("Urban Customers", f"{urban_customers} ({urban_pct:.1f}%)")
-                    else:
-                        st.info("No 'Rural/Urban' data in bulk upload.")
+                    # Removed 'Rural/Urban' data display as the option is removed
+                    st.info("Rural/Urban data removed from bulk upload.")
                 with col15:
-                    high_esg = len(results_df[results_df['Crisil_ESG_Score'] >= 80])
+                    esg_numeric = pd.to_numeric(results_df['Crisil_ESG_Score'], errors='coerce')
+                    high_esg = len(results_df[esg_numeric >= 80])
                     high_esg_pct = (high_esg / total_customers * 100) if total_customers > 0 else 0
                     st.metric("High ESG (≥80)", f"{high_esg} ({high_esg_pct:.1f}%)")
                 with col16:
-                    if 'Vehicle (Drop Down)' in results_df.columns:
-                        public_transport_users = len(results_df[results_df['Vehicle (Drop Down)'] == 'public_transport'])
+                    # Updated logic to count public transport users based on Public_Trips_Per_Day
+                    if 'Public_Trips_Per_Day' in results_df.columns:
+                        public_trips_numeric = pd.to_numeric(results_df['Public_Trips_Per_Day'], errors='coerce')
+                        public_transport_users = len(results_df[public_trips_numeric > 0])
                         public_pct = (public_transport_users / total_customers * 100) if total_customers > 0 else 0
-                        st.metric("Public Transport", f"{public_transport_users} ({public_pct:.1f}%)")
+                        st.metric("Public Transport Users", f"{public_transport_users} ({public_pct:.1f}%)")
                     else:
-                        st.info("No 'Vehicle (Drop Down)' data in bulk upload.")
+                        st.info("No 'Public_Trips_Per_Day' data in bulk upload.")
 
                 st.markdown("### Z-Score Analytics (Bulk)")
                 z_col1, z_col2, z_col3, z_col4 = st.columns(4)
@@ -2075,3 +2248,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
