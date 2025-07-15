@@ -1133,8 +1133,7 @@ def page_reporting():
             if st.session_state.scored_data is not None and not st.session_state.scored_data.empty:
                 percentile = (st.session_state.scored_data['Sustainability_Score'] < sustainability_score).mean() * 100
                 st.metric("Your Percentile", f"{percentile:.1f}%")
-            else:
-                st.info("No batch data available for percentile comparison.")
+            # Removed the else block that displayed "No batch data available for percentile comparison."
 
         st.markdown("#### Feature Breakdown (Z-Scores)")
         feature_z_df = pd.DataFrame({
@@ -1142,6 +1141,43 @@ def page_reporting():
             'Z-Score': [electricity_z, water_z, transport_z, company_z] 
         })
         st.dataframe(feature_z_df, use_container_width=True)
+
+        # New section for percentage contribution to score
+        st.markdown("#### Percentage Contribution to Total Score")
+        
+        # Calculate weighted Z-scores for each component
+        elec_weighted_z = electricity_z * (weights["Electricity_State"] + weights["Electricity_MPCE"])
+        water_weighted_z = water_z * weights["Water"]
+        transport_weighted_z = transport_z # This is already weighted
+        company_weighted_z = company_z * weights["Company"]
+
+        # Sum of absolute weighted Z-scores to normalize contributions
+        total_absolute_weighted_z = (
+            abs(elec_weighted_z) + 
+            abs(water_weighted_z) + 
+            abs(transport_weighted_z) + 
+            abs(company_weighted_z)
+        )
+
+        if total_absolute_weighted_z > 0:
+            elec_contrib_pct = (abs(elec_weighted_z) / total_absolute_weighted_z) * 100
+            water_contrib_pct = (abs(water_weighted_z) / total_absolute_weighted_z) * 100
+            transport_contrib_pct = (abs(transport_weighted_z) / total_absolute_weighted_z) * 100
+            company_contrib_pct = (abs(company_weighted_z) / total_absolute_weighted_z) * 100
+        else:
+            elec_contrib_pct = water_contrib_pct = transport_contrib_pct = company_contrib_pct = 0.0
+            st.info("No significant contributions to calculate percentages.")
+
+        col_contrib1, col_contrib2, col_contrib3, col_contrib4 = st.columns(4)
+        with col_contrib1:
+            st.metric("Electricity Contribution", f"{elec_contrib_pct:.1f}%")
+        with col_contrib2:
+            st.metric("Water Contribution", f"{water_contrib_pct:.1f}%")
+        with col_contrib3:
+            st.metric("Transport Contribution", f"{transport_contrib_pct:.1f}%")
+        with col_contrib4:
+            st.metric("Company ESG Contribution", f"{company_contrib_pct:.1f}%")
+
 
         st.markdown("#### Your Electricity Consumption Analysis")
         if st.session_state.electricity_data is not None:
