@@ -42,7 +42,7 @@ INDIAN_STATES_UTS = [
     "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan",
     "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
     "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu",
-    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweph", "Puducherry"
 ]
 
 @st.cache_data
@@ -139,19 +139,20 @@ if 'electricity_data' not in st.session_state:
     if st.session_state.electricity_data is not None:
         st.session_state.full_electricity_data = st.session_state.electricity_data # Store for overall stats
 
+# Ensure weights are always initialized with all expected keys
 if 'weights' not in st.session_state:
-    st.session_state.weights = {
-        "Electricity_State": 0.125,
-        "Electricity_MPCE": 0.125,
-        "Water": 0.25,
-        "Public_Transport": 0.125,
-        "Private_Transport": 0.125,
-        "Company": 0.25
-    }
+    st.session_state.weights = {} # Initialize as an empty dict if not present at all
+
+# Set default values for each weight, adding them if missing
+st.session_state.weights.setdefault("Electricity", 0.2885)
+st.session_state.weights.setdefault("Water", 0.2885)
+st.session_state.weights.setdefault("Commute", 0.1923)
+st.session_state.weights.setdefault("Company", 0.2308)
+
 if 'sub_weights' not in st.session_state:
     st.session_state.sub_weights = {
-        "electricity": {"location": 0.125, "mpce": 0.125},
-        "commute": {"public": 0.125, "private": 0.125},
+        "electricity": {"location": 0.125, "mpce": 0.125}, # These sub-weights might become redundant if only "Electricity" is used
+        "commute": {"public": 0.125, "private": 0.125}, # These sub-weights might become redundant if only "Commute" is used
         "water": {"water": 0.25},
         "company": {"company": 0.25}
     }
@@ -247,38 +248,40 @@ emission_factors = {
     }
 }
 
-def calculate_emission_stats():
-    all_values = []
-    for cat in emission_factors["two_wheeler"]:
-        for fuel in emission_factors["two_wheeler"][cat]:
-            min_val, max_val = emission_factors["two_wheeler"][cat][fuel]["min"], emission_factors["two_wheeler"][cat][fuel]["max"]
-            all_values.append((min_val + max_val) / 2)
-    for fuel in emission_factors["three_wheeler"]:
-        min_val, max_val = emission_factors["three_wheeler"][fuel]["min"], emission_factors["three_wheeler"][fuel]["max"]
-        all_values.append((min_val + max_val) / 2)
-    for car_type in emission_factors["four_wheeler"]:
-        for fuel in emission_factors["four_wheeler"][car_type]:
-            base, uplift = emission_factors["four_wheeler"][car_type][fuel]["base"], emission_factors["four_wheeler"][car_type][fuel]["uplift"]
-            all_values.append(base * uplift)
-    for taxi_type in emission_factors["public_transport"]["taxi"]:
-        for fuel in emission_factors["public_transport"]["taxi"][taxi_type]:
-            base, uplift = emission_factors["public_transport"]["taxi"][taxi_type][fuel]["base"], emission_factors["public_transport"]["taxi"][taxi_type][fuel]["uplift"]
-            all_values.append(base * uplift)
-    for fuel in emission_factors["public_transport"]["bus"]:
-        all_values.append(emission_factors["public_transport"]["bus"][fuel])
-    all_values.append(emission_factors["public_transport"]["metro"])
-    return np.mean(all_values), np.std(all_values)
+# Remove global emission_mean and emission_std calculation as it will be calculated dynamically for transport_z
+# def calculate_emission_stats():
+#     all_values = []
+#     for cat in emission_factors["two_wheeler"]:
+#         for fuel in emission_factors["two_wheeler"][cat]:
+#             min_val, max_val = emission_factors["two_wheeler"][cat][fuel]["min"], emission_factors["two_wheeler"][cat][fuel]["max"]
+#             all_values.append((min_val + max_val) / 2)
+#     for fuel in emission_factors["three_wheeler"]:
+#         min_val, max_val = emission_factors["three_wheeler"][fuel]["min"], emission_factors["three_wheeler"][fuel]["max"]
+#         all_values.append((min_val + max_val) / 2)
+#     for car_type in emission_factors["four_wheeler"]:
+#         for fuel in emission_factors["four_wheeler"][car_type]:
+#             base, uplift = emission_factors["four_wheeler"][car_type][fuel]["base"], emission_factors["four_wheeler"][car_type][fuel]["uplift"]
+#             all_values.append(base * uplift)
+#     for taxi_type in emission_factors["public_transport"]["taxi"]:
+#         for fuel in emission_factors["public_transport"]["taxi"][taxi_type]:
+#             base, uplift = emission_factors["public_transport"]["taxi"][taxi_type][fuel]["base"], emission_factors["public_transport"]["taxi"][taxi_type][fuel]["uplift"]
+#             all_values.append(base * uplift)
+#     for fuel in emission_factors["public_transport"]["bus"]:
+#         all_values.append(emission_factors["public_transport"]["bus"][fuel])
+#     all_values.append(emission_factors["public_transport"]["metro"])
+#     return np.mean(all_values), np.std(all_values)
 
-emission_mean, emission_std = calculate_emission_stats()
+# emission_mean, emission_std = calculate_emission_stats()
 
-def calculate_z_score_emission(emission_factor_val):
-    """Calculate Z-score for given emission factor"""
-    if emission_std == 0:
-        return 0
-    return (emission_factor_val - emission_mean) / emission_std
+# Remove calculate_z_score_emission as it's no longer used
+# def calculate_z_score_emission(emission_factor_val):
+#     """Calculate Z-score for given emission factor"""
+#     if emission_std == 0:
+#         return 0
+#     return (emission_factor_val - emission_mean) / emission_std
 
 # --- Unified Sustainability Score Calculation Function ---
-def calculate_sustainability_score(customer_data, company_data_df, electricity_data_df, weights, emission_mean, emission_std):
+def calculate_sustainability_score(customer_data, company_data_df, electricity_data_df, weights): # Removed emission_mean, emission_std from arguments
     """
     Calculates the overall sustainability score and individual Z-scores for a customer.
 
@@ -287,8 +290,6 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
         company_data_df (pd.DataFrame): DataFrame with company ESG data.
         electricity_data_df (pd.DataFrame): DataFrame with electricity consumption data.
         weights (dict): Dictionary of weights for each sustainability factor.
-        emission_mean (float): Mean emission factor for transport.
-        emission_std (float): Standard deviation of emission factors for transport.
 
     Returns:
         dict: A dictionary containing individual Z-scores, total Z-score, and sustainability score.
@@ -304,6 +305,9 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
     # Transport inputs (now derived from total_monthly_km and category)
     private_monthly_km = customer_data.get('Private_Monthly_Km', 0.0)
     public_monthly_km = customer_data.get('Public_Monthly_Km', 0.0)
+    total_monthly_km = customer_data.get('Km_per_month', 0.0) # Total monthly km for bonus calculation
+    emission_factor = customer_data.get('Transport_Emission_Factor', 0.0)
+    people_count_transport = customer_data.get('Transport_People_Count', 1)
     
     # Ensure household_size is at least 1 to avoid division by zero
     safe_household_size = household_size if household_size > 0 else 1
@@ -337,25 +341,74 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
         water_z = (per_person_monthly_water - average_monthly_per_person_water) / average_monthly_per_person_water
     st.write(f"DEBUG: Per Person Monthly Water: {per_person_monthly_water}, Average Monthly Per Person Water: {average_monthly_per_person_water}, Water Z-score: {water_z}")
 
-    # 3. Transport Z-score (using private_monthly_km and public_monthly_km)
-    # Normalizes based on 500 km/month
-    private_transport_z = private_monthly_km / 500
-    # Public transport component (15% weight, gives a bonus for usage)
-    public_transport_z = -min(1, public_monthly_km / 500)
-
-    total_transport_z_score_component = 0
+    # 3. Transport Z-score (using provided snippet logic)
+    transport_z = 0
     
-    # Apply weights as per user's prompt (0.25 for private, 0.15 for public)
-    # If only private, calculate only private. If only public, calculate only public. If both, calculate both.
-    if private_monthly_km > 0 and public_monthly_km == 0:
-        total_transport_z_score_component = private_transport_z * weights["Private_Transport"] # Use actual weight
-    elif private_monthly_km == 0 and public_monthly_km > 0:
-        total_transport_z_score_component = public_transport_z * weights["Public_Transport"] # Use actual weight
-    elif private_monthly_km > 0 and public_monthly_km > 0:
-        total_transport_z_score_component = (private_transport_z * weights["Private_Transport"]) + (public_transport_z * weights["Public_Transport"])
-    else: # No transport used
-        total_transport_z_score_component = 0
-    st.write(f"DEBUG: Private Monthly Km: {private_monthly_km}, Public Monthly Km: {public_monthly_km}, Transport Z-score: {total_transport_z_score_component}")
+    # Calculate bus emission mean and std for the given distance
+    bus_emission_factors_values = list(emission_factors["public_transport"]["bus"].values())
+    avg_bus_emission_per_km = np.mean(bus_emission_factors_values)
+    std_bus_emission_per_km = np.std(bus_emission_factors_values)
+
+    # Scale mean and std by the total monthly distance
+    bus_emission_mean_for_distance = avg_bus_emission_per_km * total_monthly_km
+    bus_emission_std_for_distance = std_bus_emission_per_km * total_monthly_km
+
+    # Ensure std_for_distance is not zero to avoid division by zero
+    if bus_emission_std_for_distance == 0:
+        # If std is zero (e.g., all bus emissions are the same or total_monthly_km is zero)
+        # use a small arbitrary value to prevent division by zero.
+        # This fallback uses a small fraction of the mean if mean is not zero, otherwise a fixed small value.
+        if bus_emission_mean_for_distance > 0:
+            bus_emission_std_for_distance = bus_emission_mean_for_distance * 0.01 
+        else:
+            bus_emission_std_for_distance = 0.005 
+
+    # The emission factor is already per km, so we need to consider the total monthly km
+    # and the number of people sharing the transport to get an individual equivalent emission.
+    individual_emission_factor_per_km = emission_factor / (people_count_transport if people_count_transport > 0 else 1)
+    
+    # Calculate total individual emission for the month
+    individual_total_monthly_emission = individual_emission_factor_per_km * total_monthly_km
+
+    if bus_emission_std_for_distance > 0:
+        transport_z = (individual_total_monthly_emission - bus_emission_mean_for_distance) / bus_emission_std_for_distance
+    else:
+        # Fallback if bus_emission_std_for_distance is 0, use a simple comparison to a baseline
+        transport_z = max(0, (individual_total_monthly_emission - bus_emission_mean_for_distance) / 0.05) # Small arbitrary std for fallback
+        
+    # Invert transport Z-score.
+    # NOTE: The current logic makes lower emissions result in a POSITIVE Z-score.
+    # For the overall sustainability score, a more NEGATIVE total_z_score is better.
+    # This means, for transport, a positive Z-score contributes negatively to the overall score (makes it worse).
+    # This existing inversion must be kept as per user instructions.
+    transport_z = -transport_z
+
+    # --- Add bonus for public transportation usage ---
+    # The goal is to make the overall sustainability score better for higher public transport usage.
+    # A better sustainability score implies a more negative 'total_z_score'.
+    # Since 'transport_z' (after the above inversion) is currently positive for good emissions,
+    # to make 'transport_z' more negative, we need to make 'transport_z' more negative (reduce its value).
+    
+    if total_monthly_km > 0:
+        public_transport_ratio = public_monthly_km / total_monthly_km
+        
+        # Define a threshold: if more than 50% of commute is public transport, apply a bonus.
+        public_transport_threshold = 0.5 
+        # Maximum Z-score reduction (bonus) to apply.
+        # This value will be subtracted from the current 'transport_z'.
+        max_bonus_z_reduction = 0.5 
+
+        if public_transport_ratio > public_transport_threshold:
+            # Scale the bonus based on how much the ratio exceeds the threshold.
+            # The 'excess_ratio' goes from 0 (at threshold) to 1 (at 100% public transport).
+            excess_ratio = min(1.0, (public_transport_ratio - public_transport_threshold) / (1.0 - public_transport_threshold))
+            
+            # Calculate the actual bonus reduction (a negative value to be added to transport_z)
+            bonus_reduction = excess_ratio * max_bonus_z_reduction
+            
+            # Apply the bonus by subtracting it from transport_z
+            transport_z -= bonus_reduction
+    st.write(f"DEBUG: Private Monthly Km: {private_monthly_km}, Public Monthly Km: {public_monthly_km}, Transport Z-score: {transport_z}")
     
     # 4. Company ESG Z-score
     company_z = 0
@@ -375,9 +428,9 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
 
     # --- Weighted Total Z-score ---
     total_z_score = (
-        electricity_z * (weights["Electricity_State"] + weights["Electricity_MPCE"]) +
+        electricity_z * weights["Electricity"] +
         water_z * weights["Water"] +
-        total_transport_z_score_component + # This now includes the weighted private/public transport Z-scores
+        transport_z * weights["Commute"] +
         company_z * weights["Company"]
     )
     st.write(f"DEBUG: Total Z-score (before tanh): {total_z_score}")
@@ -391,7 +444,7 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
     return {
         'electricity_z': electricity_z,
         'water_z': water_z,
-        'transport_z': total_transport_z_score_component, # Return the combined transport Z-score
+        'transport_z': transport_z, # Return the calculated transport Z-score
         'company_z': company_z,
         'total_z_score': total_z_score,
         'sustainability_score': sustainability_score
@@ -859,7 +912,7 @@ def page_test_customer():
 
                 # Add employee size or selected company based on analysis type
                 if st.session_state.esg_analysis_type == "Employee Range Analysis":
-                    single_customer_inputs_to_save['Employee_Size_Category_Value'] = employee_size_value_for_csv
+                    single_customer_inputs_to_save['Total_Employees'] = employee_size_value_for_csv
                 elif st.session_state.esg_analysis_type == "Company-Only Analysis":
                     single_customer_inputs_to_save['Selected_Company'] = selected_company_name_for_csv
                 
@@ -971,33 +1024,29 @@ def page_evaluation():
     st.markdown("Adjust the importance of different sustainability factors.")
 
     st.markdown("**Electricity Consumption**")
-    w_elec_total = st.number_input("Electricity Weight", value=st.session_state.weights["Electricity_State"] + st.session_state.weights["Electricity_MPCE"], step=0.01, format="%.3f", key="wt_elec_total")
-    st.markdown(f"*(Current Total Electricity Weight: {w_elec_total:.3f}, Target: 0.25)*")
+    w_elec = st.number_input("Electricity Weight", value=st.session_state.weights["Electricity"], step=0.001, format="%.4f", key="wt_elec")
+    st.markdown(f"*(Current Electricity Weight: {w_elec:.4f}, Target: 0.2885)*")
 
     st.markdown("**Water Consumption**")
-    w_water = st.number_input("Water Weight", value=st.session_state.weights["Water"], step=0.01, format="%.3f", key="wt_water")
-    st.markdown(f"*(Current Total Water Weight: {w_water:.3f}, Target: 0.25)*")
+    w_water = st.number_input("Water Weight", value=st.session_state.weights["Water"], step=0.001, format="%.4f", key="wt_water")
+    st.markdown(f"*(Current Water Weight: {w_water:.4f}, Target: 0.2885)*")
 
     st.markdown("**Commute**")
-    # Display the current weights for public and private transport
-    w_public = st.number_input("Public Transport Weight", value=st.session_state.weights["Public_Transport"], step=0.01, format="%.3f", key="wt_public")
-    w_private = st.number_input("Private Transport Weight", value=st.session_state.weights["Private_Transport"], step=0.01, format="%.3f", key="wt_private")
-    st.markdown(f"*(Current Total Commute Weight: {w_public + w_private:.3f}, Target: 0.25)*") # This target might need adjustment if user changes individual weights
+    w_commute = st.number_input("Commute Weight", value=st.session_state.weights["Commute"], step=0.001, format="%.4f", key="wt_commute")
+    st.markdown(f"*(Current Commute Weight: {w_commute:.4f}, Target: 0.1923)*")
 
     st.markdown("**Company Environmental Score**")
-    w_company = st.number_input("Company Environmental Score Weight", value=st.session_state.weights["Company"], step=0.01, format="%.3f", key="wt_company")
-    st.markdown(f"*(Current Total Company Weight: {w_company:.3f}, Target: 0.25)*")
+    w_company = st.number_input("Company Environmental Score Weight", value=st.session_state.weights["Company"], step=0.001, format="%.4f", key="wt_company")
+    st.markdown(f"*(Current Company Weight: {w_company:.4f}, Target: 0.2308)*")
 
     current_weights = {
-        "Electricity_State": w_elec_total / 2, 
-        "Electricity_MPCE": w_elec_total / 2,
+        "Electricity": w_elec,
         "Water": w_water,
-        "Public_Transport": w_public, # Keep these for consistency, though Z-score calculation uses fixed values
-        "Private_Transport": w_private, # Keep these for consistency, though Z-score calculation uses fixed values
+        "Commute": w_commute,
         "Company": w_company
     }
     total_current_weight = sum(current_weights.values())
-    st.markdown(f"**Overall Total Weight:** {total_current_weight:.3f}")
+    st.markdown(f"**Overall Total Weight:** {total_current_weight:.4f}")
 
     if abs(total_current_weight - 1.0) > 1e-3:
         st.error("Overall total weights must sum exactly to 1.0!")
@@ -1005,8 +1054,8 @@ def page_evaluation():
         if st.button("Apply Weighted Score Settings"):
             st.session_state.weights = current_weights
             st.session_state.sub_weights = {
-                "electricity": {"total": w_elec_total}, 
-                "commute": {"public": w_public, "private": w_private}, # Update these based on user input
+                "electricity": {"total": w_elec},
+                "commute": {"total": w_commute},
                 "water": {"water": w_water},
                 "company": {"company": w_company}
             }
@@ -1027,24 +1076,17 @@ def page_reporting():
         weights = st.session_state.weights
 
         labels = [
-            "Electricity", "Water", "Commute", "Company",
-            "Public Transport", "Private Transport"
+            "Electricity", "Water", "Commute", "Company"
         ]
         parents = [
-            "", "", "", "",
-            "Commute", "Commute"
+            "", "", "", ""
         ]
 
-        electricity_total = weights["Electricity_State"] + weights["Electricity_MPCE"]
-        commute_total = weights["Public_Transport"] + weights["Private_Transport"]
-
         values = [
-            electricity_total,
+            weights["Electricity"],
             weights["Water"],
-            commute_total,
-            weights["Company"],
-            weights["Public_Transport"],
-            weights["Private_Transport"]
+            weights["Commute"],
+            weights["Company"]
         ]
 
         if sum(weights.values()) == 0:
@@ -1056,9 +1098,9 @@ def page_reporting():
                     parents=parents,
                     values=values,
                     branchvalues="total",
-                    hovertemplate='<b>%{label}</b><br>Weight: %{value:.3f}<extra></extra>',
+                    hovertemplate='<b>%{label}</b><br>Weight: %{value:.4f}<extra></extra>', # Updated format to 4 decimal places
                     insidetextorientation='radial',
-                    maxdepth=2,
+                    maxdepth=1, # Changed maxdepth to 1 as there are no sub-categories for now
                 ))
 
                 fig.update_layout(
@@ -1087,9 +1129,8 @@ def page_reporting():
             customer_data,
             st.session_state.company_data,
             st.session_state.electricity_data,
-            st.session_state.weights,
-            emission_mean,
-            emission_std
+            st.session_state.weights
+            # Removed emission_mean, emission_std from arguments
         )
         st.write(f"DEBUG: Manual Input - Sustainability Results: {sustainability_results}")
 
@@ -1143,12 +1184,12 @@ def page_reporting():
         st.dataframe(feature_z_df, use_container_width=True)
 
         # New section for percentage contribution to score
-        st.markdown("#### Percentage Contribution to Total Score")
+        st.markdown("#### Percentage Contribution to Total Score()")
         
         # Calculate weighted Z-scores for each component
-        elec_weighted_z = electricity_z * (weights["Electricity_State"] + weights["Electricity_MPCE"])
+        elec_weighted_z = electricity_z * weights["Electricity"]
         water_weighted_z = water_z * weights["Water"]
-        transport_weighted_z = transport_z # This is already weighted
+        transport_weighted_z = transport_z * weights["Commute"]
         company_weighted_z = company_z * weights["Company"]
 
         # Sum of absolute weighted Z-scores to normalize contributions
@@ -1307,11 +1348,11 @@ def page_reporting():
             st.metric("Emission Factor", f"{emission_factor:.4f} kg CO2/km")
             st.metric("Vehicle Used", vehicle_name)
 
-            # Use the combined transport_z from calculate_sustainability_score
+            # Use the calculated transport_z from calculate_sustainability_score
             st.metric("Transport Z-Score", f"{transport_z:.2f}")
 
             st.session_state.transport_carbon_results['total_emissions'] = total_emissions_per_person
-            st.session_state.transport_carbon_results['z_score_emission'] = transport_z # Use the combined Z-score
+            st.session_state.transport_carbon_results['z_score_emission'] = transport_z # Use the calculated Z-score
             st.session_state.transport_carbon_results['emission_category'] = "High" if transport_z > 0.5 else ("Average" if transport_z > -0.5 else "Low")
             
             if total_monthly_km > 0: # Check if any transport is used
@@ -1345,9 +1386,9 @@ def page_reporting():
                 
                 st.info(f"""
                 **Z-Score Interpretation for Transport:**
-                - A more negative Z-score indicates lower emissions relative to the baseline (500 km/month).
+                - A more negative Z-score indicates lower emissions relative to the baseline (global mean).
                 - Your transport Z-score is {abs(transport_z):.2f} standard deviations {'above' if transport_z > 0 else 'below'} the average.
-                - Private transport increases Z-score (bad), public transport decreases Z-score (good).
+                - A positive Z-score indicates higher emissions than average, while a negative Z-score indicates lower emissions.
                 """)
                 
                 recommendations = []
@@ -2068,6 +2109,10 @@ def page_reporting():
 
                         commute_emission_calc = 0.0
                         
+                        # Initialize ratios to 0.0 to prevent UndefinedVariable error
+                        private_ratio_csv = 0.0
+                        public_ratio_csv = 0.0
+
                         # Logic to calculate emission_factor_calc for bulk, similar to single customer
                         # For bulk, we'll use the Transport_Emission_Factor directly if available, otherwise calculate a default
                         transport_emission_factor_from_csv = float(row.get("Transport_Emission_Factor", 0.0)) if not pd.isna(row.get("Transport_Emission_Factor")) else 0.0
@@ -2087,16 +2132,13 @@ def page_reporting():
                                 if total_trips_per_day_csv > 0:
                                     private_ratio_csv = private_trips_per_day_csv / total_trips_per_day_csv
                                     public_ratio_csv = public_trips_per_day_csv / total_trips_per_day_csv
-                                else:
-                                    private_ratio_csv = 0.0
-                                    public_ratio_csv = 0.0
-
+                                
                                 # Use default emission factors for combined if not specified in CSV
                                 private_ef_for_combined_csv = emission_factors["two_wheeler"]["Scooter"]["petrol"]["min"] # Default private
                                 public_ef_for_combined_csv = emission_factors["public_transport"]["metro"] # Default public
 
-                                commute_emission_calc = (private_ef_for_combined_csv * private_ratio_csv) + \
-                                                        (public_ef_for_combined_csv * public_ratio_csv)
+                                commute_emission_calc = (private_ef_for_combined_csv / (1 if private_trips_per_day_csv > 0 else 1)) * private_ratio_csv + \
+                                                        (public_ef_for_combined_csv / (1 if public_trips_per_day_csv > 0 else 1)) * public_ratio_csv
                             else:
                                 commute_emission_calc = 0.0 # No transport or unknown category
 
@@ -2118,9 +2160,8 @@ def page_reporting():
                             customer_data_for_bulk,
                             st.session_state.company_data,
                             st.session_state.electricity_data,
-                            st.session_state.weights,
-                            emission_mean,
-                            emission_std
+                            st.session_state.weights
+                            # Removed emission_mean, emission_std from arguments
                         )
                         st.write(f"DEBUG: Row {idx} - Bulk Sustainability Results: {bulk_sustainability_results}")
 
@@ -2284,4 +2325,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
