@@ -48,7 +48,7 @@ INDIAN_STATES_UTS = [
 @st.cache_data
 def load_company_data():
     """
-    Preload company data from a fixed CSV path.
+    Preload company data from a fixed CSV path and apply sector classification mapping.
     """
     try:
         df = pd.read_csv("employees_2024_25_updated.csv")
@@ -71,6 +71,202 @@ def load_company_data():
     if missing:
         st.error(f"Missing columns in employees_2024_25_updated.csv: {', '.join(missing)}")
         return None
+
+    # Define the mapping for sector classifications based on user's 24 rules
+    sector_mapping = {
+        # 1. Agri Commodities
+        'Agri Commodities': 'Agri Commodities',
+        'Agri Commodity': 'Agri Commodities',
+
+        # 2. Auto Parts
+        'Auto Components & Equipments': 'Auto Parts',
+        'Auto Dealer': 'Auto Parts',
+        'Auto OEM': 'Auto Parts',
+        'Auto components and equipments (Batteries)': 'Auto Parts',
+
+        # 3. Bank
+        'Bank': 'Bank',
+        'Banks': 'Bank',
+
+        # 4. Cement
+        'Cement': 'Cement',
+        'Cement & Cement Products (Diversified)': 'Cement',
+
+        # 5. Chemicals
+        'Chemical (Carbon Black)': 'Chemicals',
+        'Chemicals (Carbon Black)': 'Chemicals',
+        'Chemicals (Dyes & Pigments)': 'Chemicals',
+        'Chemicals (Dyes and Pigments)': 'Chemicals',
+        'Chemicals (Explosives)': 'Chemicals',
+        'Chemicals (Petrochemicals)': 'Chemicals',
+        'Chemicals - Fertilizers': 'Chemicals',
+
+        'Civil Construction': 'Civil Construction', 
+
+
+        # 6. Compressors, Pumps & Diesel Engines
+        'Compressors, Pumps & Diesel Engine': 'Compressors, Pumps & Diesel Engines',
+        'Compressors, Pumps & Diesel Engines': 'Compressors, Pumps & Diesel Engines',
+
+        # 7. Consumer Durables
+        'Consumer Durables - Consumer Electronics': 'Consumer Durables',
+        'Consumer Durables - Footwear': 'Consumer Durables',
+        'Consumer Durables - Furniture And Home Furnishing': 'Consumer Durables',
+        'Consumer Durables - Gems, Jewellery And Watches': 'Consumer Durables',
+        'Consumer Durables - Gems, Jewellery and Watches': 'Consumer Durables',
+        'Consumer Durables - gems, jewellery and watches': 'Consumer Durables',
+        'Consumer Durables - Glassware': 'Consumer Durables',
+        'Consumer Durables - Household Appliances': 'Consumer Durables',
+        'Consumer Durables - Houseware': 'Consumer Durables',
+        'Consumer Durables - Leather And Leather Products': 'Consumer Durables',
+        'Consumer Durables - Plastic Products': 'Consumer Durables',
+        'Consumer Durables - PlasticProducts': 'Consumer Durables',
+        # Added to consolidate related terms under Consumer Durables as per user's implied request to fix repetitions
+        'Consumer Electronics': 'Consumer Durables',
+        'Household appliances': 'Consumer Durables',
+        'Household products (Batteries)': 'Consumer Durables',
+        'Consumer': 'Consumer Durables',
+        'Consumer Durables': 'Consumer Durables',
+        'Consumer Durables - Gems, Jewellery And': 'Consumer Durables',  # Consolidating 'Consumer Durables - Gems, Jewellery And' to 'Consumer Durables'
+        'Consumer Durables - Plastic': 'Consumer Durables',  # Consolidating 'Consumer Durables - Plastic' to 'Consumer Durables'
+
+        # 8. Diversified
+        'Diversified': 'Diversified',
+        'Diversified Commercial Services': 'Diversified',
+        'Diversified FMCG': 'Diversified',
+
+        # 9. Financial Institution
+        'Financial Institution': 'Financial Institution',
+        'Financial Services (Capital Market)': 'Financial Institution',
+        'Financial Services (capital markets)': 'Financial Institution',
+        'Financial Services (fintech)': 'Financial Institution',
+
+        # 10. Holding Company
+        'Holding': 'Holding Company',
+        'Holding company': 'Holding Company',
+
+        # 11. IT
+        'IT': 'IT',
+        'IT - BPO and KPO Services': 'IT',
+        'IT - Financial Technology': 'IT',
+        'IT - Software': 'IT',
+        'IT – Computers - Software & Consulting': 'IT',
+        'IT – Financial Technology': 'IT',
+        'IT – Other telecom services': 'IT',
+        'IT Computers - Software & Consulting': 'IT',
+        'IT Other telecom services': 'IT',
+        'Information Technology': 'IT',
+        'Information Technology (Satellite Communication Services)': 'IT',
+
+        # 12. Industrials
+        'Industrial': 'Industrials',
+        'Industrial Products (Auto Components & Equipments)': 'Industrials',
+        'Industrial Products-Plastic & Packaging': 'Industrials',
+        'Industrial gases': 'Industrials',
+        'Industrial manufacturing': 'Industrials',
+        'Industrial products': 'Industrials',
+        'Industrial Products':'Industrials',
+        'Industrial products (Packaging)': 'Industrials',
+        'Industrials': 'Industrials',
+
+        # 13. Media & Entertainment
+        'Media & Entertainment': 'Media & Entertainment',
+        'Media Entertainment & Publication': 'Media & Entertainment',
+        'Media Film Production Distribution & Exhibition': 'Media & Entertainment',
+        'Media & Entertainment': 'Media & Entertainment',
+        'Media – Film Production Distribution & Exhibition': 'Media & Entertainment',
+
+        # 14. Metals
+        'Metals - Ferrous': 'Metals',
+        'Metals - Non-Ferrous': 'Metals',
+        'Metals Ferrous (Ferro & Silica Manganese)': 'Metals',
+        'Metals Ferrous (Ferro & silica manganese)': 'Metals',
+        'Metals Ferrous (Iron & Steel)': 'Metals',
+        'Metals Ferrous (Iron & Steel Products)': 'Metals',
+        'Metals Ferrous (Iron & Steel products)': 'Metals',
+        'Metals Ferrous (Iron and steel)': 'Metals',
+        'Metals Ferrous (Pig Iron)': 'Metals',
+        'Metals Linked products (Iron & Steel Products)': 'Metals',
+
+        # 15. Minerals and Mining
+        'Minerals & Mining': 'Minerals and Mining',
+        'Minerals and mining': 'Minerals and Mining',
+        'Mining': 'Minerals and Mining',
+        'Mining (coal)': 'Minerals and Mining',
+        'Non - Ferrous Metals': 'Minerals and Mining', # Explicitly requested in point 15
+
+        # 16. Oil & Gas
+        'Oil & Gas - Exploration & Production': 'Oil & Gas',
+        'Oil & Gas - Gas': 'Oil & Gas',
+        'Oil & Gas - Refining & Marketing': 'Oil & Gas',
+        'Oil and Gas - gas': 'Oil & Gas',
+        'Oil and Gas - Gas': 'Oil & Gas',
+
+        # 17. Plastic Products
+        'Plastic Products Industrial (Pipes)': 'Plastic Products',
+        'Plastic products- Industrial': 'Plastic Products',
+        'Plastic Products': 'Plastic Products',
+        'Plastic Products – Industrial (Pipes)': 'Plastic Products',
+
+        # 18. Ports & Services
+        'Port & Port services': 'Ports & Services',
+        'Ports & Port Services': 'Ports & Services',
+
+        # 19. Power
+        'Power - Thermal': 'Power',
+        'Power Renewable (Hydro, Nuclear)': 'Power',
+        'Power Renewable (Solar, Wind)': 'Power',
+        'Power T&D': 'Power',
+        'Power Thermal': 'Power',
+        'Power Trading': 'Power',
+        'Power generation (Renewables)': 'Power',
+        'Power- Thermal': 'Power',
+        'Power- Thermal (Integrated Power Utilities)': 'Power',
+        'Power- Thermal (Power Generation)': 'Power',
+
+        # 20. Retail
+        'Retailing (Diversified Retail)': 'Retail',
+        'Retailing (Pharmacy Retail)': 'Retail',
+
+        # 21. Road Assets - Toll Annuity Hybrid-Annuity
+        'Road Assets - Toll Annuity Hybrid-Annuity': 'Road Assets - Toll Annuity Hybrid-Annuity',
+        'Road Assets Toll, Annuity, Hybrid-Annuity': 'Road Assets - Toll Annuity Hybrid-Annuity',
+        'Road Assets–Toll, Annuity, Hybrid-Annuity': 'Road Assets - Toll Annuity Hybrid-Annuity',
+
+        # 22. Ship Building & Allied Services
+        'Ship Building & Allied Services': 'Ship Building & Allied Services',
+        'Shipbuilding & Allied Services': 'Ship Building & Allied Services',
+
+        # 23. Telecommunications
+        'Telecom': 'Telecommunications',
+        'Telecom - Cellular & Fixed line services': 'Telecommunications',
+        'Telecom - Infrastructure': 'Telecommunications',
+        'Telecommunication - Cellular & Fixed line services': 'Telecommunications',
+        'Telecommunication - Equipment & Accessories': 'Telecommunications',
+        'Telecommunication - Infrastructure': 'Telecommunications',
+        'Telecommunication - Services': 'Telecommunications',
+        'Telecommunication Infrastructure': 'Telecommunications',
+        'Telecommunications': 'Telecommunications',
+        'Telecommunications - Equipment & Accessories': 'Telecommunications',
+        'Telecommunications - Services': 'Telecommunications',
+        'Telecommunication -Services': 'Telecommunications',
+        'Telecommunication – Infrastructure': 'Telecommunications',
+        'Equipment & Accessories': 'Telecommunications',
+
+        'Textile': 'Textiles',
+
+        # 24. Tour and Travel Related Services
+        'Tour and travel-related services': 'Tour and Travel Related Services',
+        'Tour, Travel Related Services': 'Tour and Travel Related Services',
+    }
+
+    # Apply the mapping to the 'Sector_classification' column
+    # Use .get() with a default to handle any classifications not explicitly in the map,
+    # keeping them as is.
+    df['Sector_classification'] = df['Sector_classification'].apply(
+        lambda x: sector_mapping.get(x.strip(), x) if isinstance(x, str) else x
+    )
+    
     return df
 
 @st.cache_data
@@ -103,6 +299,17 @@ def load_real_electricity_data():
         df['hh_size'] = pd.to_numeric(df['hh_size'], errors='coerce')
         df.dropna(subset=['state_name', 'qty_usage_in_1month', 'hh_size'], inplace=True)
 
+        # Correcting state names in the DataFrame to match INDIAN_STATES_UTS for proper filtering
+        df['state_name'] = df['state_name'].replace({
+            'Tamilnadu': 'Tamil Nadu',
+            'Lakshadweep (U.T.)': 'Lakshadweph',
+            'Chandigarh(U.T.)': 'Chandigarh',
+            'Dadra & Nagar Haveli and Daman & Diu': 'Dadra and Nagar Haveli and Daman and Diu',
+            'Jammu & Kashmir': 'Jammu and Kashmir',
+            'Ladakh (U.T.)': 'Ladakh',
+            'Puducherry (U.T.)': 'Puducherry',
+            'Uttrakhand': 'Uttarakhand'
+        })
 
         # Further filter for states that are in INDIAN_STATES_UTS
         df = df[df['state_name'].isin(INDIAN_STATES_UTS)].copy()
@@ -138,6 +345,10 @@ if 'electricity_data' not in st.session_state:
     st.session_state.electricity_data = load_real_electricity_data()
     if st.session_state.electricity_data is not None:
         st.session_state.full_electricity_data = st.session_state.electricity_data # Store for overall stats
+
+# Ensure baseline_values_by_state is always initialized
+if 'baseline_values_by_state' not in st.session_state:
+    st.session_state.baseline_values_by_state = {}
 
 # Ensure weights are always initialized with all expected keys
 if 'weights' not in st.session_state:
@@ -280,7 +491,7 @@ emission_factors = {
 #         return 0
 #     return (emission_factor_val - emission_mean) / emission_std
 
-# --- Unified Sustainability Score Calculation Function ---
+
 def calculate_sustainability_score(customer_data, company_data_df, electricity_data_df, weights): # Removed emission_mean, emission_std from arguments
     """
     Calculates the overall sustainability score and individual Z-scores for a customer.
@@ -322,15 +533,22 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
     # 1. Electricity Z-score
     electricity_z = 0
     if electricity_data_df is not None and not electricity_data_df.empty and 'qty_usage_in_1month' in electricity_data_df.columns:
-        electricity_baseline = electricity_data_df['qty_usage_in_1month'].mean()
-        electricity_std = electricity_data_df['qty_usage_in_1month'].std()
+        user_state_name = customer_data.get('State') # Get the user's selected state
+        # Ensure baseline_values_by_state exists before accessing it
+        if user_state_name in st.session_state.get('baseline_values_by_state', {}):
+            electricity_baseline, electricity_std = st.session_state.baseline_values_by_state[user_state_name]["Electricity"]
+        else:
+            # Fallback to overall mean/std if state-specific data not found or baseline_values_by_state is empty
+            electricity_baseline = electricity_data_df['qty_usage_in_1month'].mean()
+            electricity_std = electricity_data_df['qty_usage_in_1month'].std()
+
         if electricity_std > 0:
             electricity_z = (individual_equivalent_consumption - electricity_baseline) / electricity_std
         else:
-            electricity_z = max(0, (individual_equivalent_consumption - electricity_baseline) / 100) # Fallback if std is 0
+            electricity_z = max(0, (individual_equivalent_consumption - electricity_baseline) / 50) # Fallback if std is 0
     else:
         # Fallback if electricity data is not loaded or invalid
-        electricity_z = max(0, (individual_equivalent_consumption - 100) / 100)
+        electricity_z = max(0, (individual_equivalent_consumption - 50) / 50)
     st.write(f"DEBUG: Electricity Z-score: {electricity_z}")
 
     # 2. Water Z-score
@@ -376,18 +594,15 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
         # Fallback if bus_emission_std_for_distance is 0, use a simple comparison to a baseline
         transport_z = max(0, (individual_total_monthly_emission - bus_emission_mean_for_distance) / 0.05) # Small arbitrary std for fallback
         
-    # Invert transport Z-score.
-    # NOTE: The current logic makes lower emissions result in a POSITIVE Z-score.
-    # For the overall sustainability score, a more NEGATIVE total_z_score is better.
-    # This means, for transport, a positive Z-score contributes negatively to the overall score (makes it worse).
-    # This existing inversion must be kept as per user instructions.
-    transport_z = -transport_z
+    # FIX: Removed the inversion here. A negative Z-score means better emissions,
+    # which will correctly contribute to a more negative total_z_score and higher sustainability score.
+    # transport_z = -transport_z
 
     # --- Add bonus for public transportation usage ---
     # The goal is to make the overall sustainability score better for higher public transport usage.
     # A better sustainability score implies a more negative 'total_z_score'.
-    # Since 'transport_z' (after the above inversion) is currently positive for good emissions,
-    # to make 'transport_z' more negative, we need to make 'transport_z' more negative (reduce its value).
+    # Since 'transport_z' is now negative for good emissions, subtracting a positive bonus
+    # will make it even more negative, further improving the overall score.
     
     if total_monthly_km > 0:
         public_transport_ratio = public_monthly_km / total_monthly_km
@@ -403,7 +618,7 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
             # The 'excess_ratio' goes from 0 (at threshold) to 1 (at 100% public transport).
             excess_ratio = min(1.0, (public_transport_ratio - public_transport_threshold) / (1.0 - public_transport_threshold))
             
-            # Calculate the actual bonus reduction (a negative value to be added to transport_z)
+            # Calculate the actual bonus reduction (a positive value to be subtracted from transport_z)
             bonus_reduction = excess_ratio * max_bonus_z_reduction
             
             # Apply the bonus by subtracting it from transport_z
@@ -557,6 +772,7 @@ def page_test_customer():
             selected_industry = None
 
             if analysis_type == "Employee Range Analysis":
+                # Use the mapped sector classifications for the selectbox
                 industry_opts = sorted(company_data['Sector_classification'].dropna().unique())
                 selected_industry = st.selectbox("Select Industry Sector", industry_opts, key="employee_range_industry")
 
@@ -1184,7 +1400,7 @@ def page_reporting():
         st.dataframe(feature_z_df, use_container_width=True)
 
         # New section for percentage contribution to score
-        st.markdown("#### Percentage Contribution to Total Score()")
+        st.markdown("#### Percentage Contribution to Total Score")
         
         # Calculate weighted Z-scores for each component
         elec_weighted_z = electricity_z * weights["Electricity"]
@@ -2092,7 +2308,7 @@ def page_reporting():
                         
                         # Ensure Private_Monthly_Km and Public_Monthly_Km are correctly read as floats
                         private_monthly_km_csv = pd.to_numeric(row.get("Private_Monthly_Km", 0.0), errors='coerce')
-                        public_monthly_km_csv = pd.to_numeric(row.get("Public_Monthly_Km", 0.0), errors='coerce')
+                        public_monthly_km_csv = pd.to_numeric(row.get("Public_Trips_Per_Day", 0.0), errors='coerce') # Corrected to Public_Trips_Per_Day from Public_Monthly_Km
 
                         # New: Read private and public trips per day from CSV for bulk processing
                         private_trips_per_day_csv = int(row.get("Private_Trips_Per_Day", 0)) if not pd.isna(row.get("Private_Trips_Per_Day")) else 0
