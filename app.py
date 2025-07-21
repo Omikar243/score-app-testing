@@ -42,7 +42,7 @@ INDIAN_STATES_UTS = [
     "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan",
     "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
     "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu",
-    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweph", "Puducherry"
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadeep", "Puducherry"
 ]
 
 @st.cache_data
@@ -51,7 +51,19 @@ def load_company_data():
     Preload company data from a fixed CSV path and apply sector classification mapping.
     """
     try:
-        df = pd.read_csv("employees_2024_25_updated.csv")
+        # Try different encodings to handle special characters
+        encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        df = None
+        for encoding in encodings_to_try:
+            try:
+                df = pd.read_csv("employees_2024_25_updated.csv", encoding=encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if df is None:
+            st.error("Could not read the CSV file with any of the supported encodings.")
+            return None
     except FileNotFoundError:
         st.error(
             "Could not find employees_2024_25_updated.csv in the app directory.\n"
@@ -150,10 +162,10 @@ def load_company_data():
         'IT - BPO and KPO Services': 'IT',
         'IT - Financial Technology': 'IT',
         'IT - Software': 'IT',
-        'IT – Computers - Software & Consulting': 'IT',
-        'IT – Financial Technology': 'IT',
-        'IT – Other telecom services': 'IT',
         'IT Computers - Software & Consulting': 'IT',
+        'IT – Computers - Software & Consulting': 'IT', # Added to consolidate
+        'IT – Financial Technology': 'IT', # Added to consolidate
+        'IT – Other telecom services': 'IT', # Added to consolidate
         'IT Other telecom services': 'IT',
         'Information Technology': 'IT',
         'Information Technology (Satellite Communication Services)': 'IT',
@@ -215,7 +227,6 @@ def load_company_data():
         # 19. Power
         'Power - Thermal': 'Power',
         'Power Renewable (Hydro, Nuclear)': 'Power',
-        'Power Renewable (Solar, Wind)': 'Power',
         'Power T&D': 'Power',
         'Power Thermal': 'Power',
         'Power Trading': 'Power',
@@ -251,9 +262,9 @@ def load_company_data():
         'Telecommunications - Services': 'Telecommunications',
         'Telecommunication -Services': 'Telecommunications',
         'Telecommunication – Infrastructure': 'Telecommunications',
-        'Equipment & Accessories': 'Telecommunications',
+        'Equipment & Accessories': 'Telecommunications', # Added to consolidate
 
-        'Textile': 'Textiles',
+        'Textile': 'Textiles', # Consolidate 'Textile' to 'Textiles'
 
         # 24. Tour and Travel Related Services
         'Tour and travel-related services': 'Tour and Travel Related Services',
@@ -271,33 +282,38 @@ def load_company_data():
 
 @st.cache_data
 def load_real_electricity_data():
-    """Load electricity consumption data from the new 'Electricity_Analysis.xlsx' file."""
+    """Load electricity consumption data from the new 'electricity_data_with_mpce_hhsize.csv' file."""
     try:
-        file_path = "Electricity_Analysis.xlsx"
+        file_path = "electricity_data_with_mpce_hhsize.csv"
         if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
+            df = pd.read_csv(file_path)
         else:
-            st.error("No electricity data file found. Please make sure 'Electricity_Analysis.xlsx' exists in the app directory.")
+            st.error("No electricity data file found. Please make sure 'electricity_data_with_mpce_hhsize.csv' exists in the app directory.")
             return None
 
        
-        needed = ['State/UT', 'Individual Consumption (23-24)', 'HH Size Average (23-24)']
+        needed = ['state_name', 'cons_total_qty', 'hh_size']
         missing = [c for c in needed if c not in df.columns]
         if missing:
-            st.error(f"Missing columns in 'Electricity_Analysis.xlsx': {', '.join(missing)}")
+            st.error(f"Missing columns in 'electricity_data_with_mpce_hhsize.csv': {', '.join(missing)}")
             return None
 
-        
-        df = df.rename(columns={
-            'State/UT': 'state_name',
-            'Individual Consumption (23-24)': 'qty_usage_in_1month',
-            'HH Size Average (23-24)': 'hh_size'
-        })
+        # No renaming needed as the columns are already in the desired format:
+        # 'state_name' for state names
+        # 'cons_total_qty' for electricity usage per month
+        # 'hh_size' for household size
 
         # Ensure data types are correct
-        df['qty_usage_in_1month'] = pd.to_numeric(df['qty_usage_in_1month'], errors='coerce')
+        df['cons_total_qty'] = pd.to_numeric(df['cons_total_qty'], errors='coerce')
         df['hh_size'] = pd.to_numeric(df['hh_size'], errors='coerce')
-        df.dropna(subset=['state_name', 'qty_usage_in_1month', 'hh_size'], inplace=True)
+        df.dropna(subset=['state_name', 'cons_total_qty', 'hh_size'], inplace=True)
+
+        # Calculate per_person_qty_usage for the baseline
+        # Handle division by zero for hh_size
+        df['per_person_qty_usage'] = df.apply(
+            lambda row: row['cons_total_qty'] / row['hh_size'] if row['hh_size'] > 0 else row['cons_total_qty'],
+            axis=1
+        )
 
         # Correcting state names in the DataFrame to match INDIAN_STATES_UTS for proper filtering
         df['state_name'] = df['state_name'].replace({
@@ -308,7 +324,8 @@ def load_real_electricity_data():
             'Jammu & Kashmir': 'Jammu and Kashmir',
             'Ladakh (U.T.)': 'Ladakh',
             'Puducherry (U.T.)': 'Puducherry',
-            'Uttrakhand': 'Uttarakhand'
+            'Uttrakhand': 'Uttarakhand',
+            'A and N Islands (U.T.)': 'Andaman and Nicobar Islands',
         })
 
         # Further filter for states that are in INDIAN_STATES_UTS
@@ -320,11 +337,11 @@ def load_real_electricity_data():
         state_stats = {}
         for state in df["state_name"].unique():
             state_df = df[df["state_name"] == state]
-            if not state_df.empty:
+            if len(state_df) > 0: # Check if state_df is not empty after filtering
                 state_stats[state] = {
                     "Electricity": (
-                        state_df["qty_usage_in_1month"].mean(),
-                        state_df["qty_usage_in_1month"].std()
+                        state_df["per_person_qty_usage"].mean(), # Use per_person_qty_usage for mean
+                        state_df["per_person_qty_usage"].std()   # Use per_person_qty_usage for std
                     ),
                     "HH_Size": (
                         state_df["hh_size"].mean(),
@@ -335,7 +352,7 @@ def load_real_electricity_data():
         return df
 
     except Exception as e:
-        st.error(f"Error loading or processing 'Electricity_Analysis.xlsx': {str(e)}")
+        st.error(f"Error loading or processing 'electricity_data_with_mpce_hhsize.csv': {str(e)}")
         return None
 
 
@@ -425,8 +442,8 @@ def calculate_feature_stats(electricity_data):
         return {}
     return {
         'Electricity': {
-            'mean': electricity_data['qty_usage_in_1month'].mean(),
-            'std':  electricity_data['qty_usage_in_1month'].std()
+            'mean': electricity_data['cons_total_qty'].mean(),
+            'std':  electricity_data['cons_total_qty'].std()
         }
     }
 st.session_state.feature_stats = calculate_feature_stats(st.session_state.electricity_data)
@@ -491,7 +508,7 @@ emission_factors = {
 #         return 0
 #     return (emission_factor_val - emission_mean) / emission_std
 
-
+# --- Unified Sustainability Score Calculation Function ---
 def calculate_sustainability_score(customer_data, company_data_df, electricity_data_df, weights): # Removed emission_mean, emission_std from arguments
     """
     Calculates the overall sustainability score and individual Z-scores for a customer.
@@ -532,15 +549,19 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
 
     # 1. Electricity Z-score
     electricity_z = 0
-    if electricity_data_df is not None and not electricity_data_df.empty and 'qty_usage_in_1month' in electricity_data_df.columns:
+    electricity_baseline = 0.0
+    electricity_std = 0.0 # Default fallback if data issues
+    if electricity_data_df is not None and not electricity_data_df.empty and 'per_person_qty_usage' in electricity_data_df.columns:
         user_state_name = customer_data.get('State') # Get the user's selected state
-        # Ensure baseline_values_by_state exists before accessing it
-        if user_state_name in st.session_state.get('baseline_values_by_state', {}):
-            electricity_baseline, electricity_std = st.session_state.baseline_values_by_state[user_state_name]["Electricity"]
+        state_data = electricity_data_df[electricity_data_df['state_name'] == user_state_name]
+        
+        if not state_data.empty:
+            electricity_baseline = state_data['per_person_qty_usage'].mean()
+            electricity_std = state_data['per_person_qty_usage'].std()
         else:
-            # Fallback to overall mean/std if state-specific data not found or baseline_values_by_state is empty
-            electricity_baseline = electricity_data_df['qty_usage_in_1month'].mean()
-            electricity_std = electricity_data_df['qty_usage_in_1month'].std()
+            # Fallback to overall mean/std if no data for selected state
+            electricity_baseline = electricity_data_df['per_person_qty_usage'].mean()
+            electricity_std = electricity_data_df['per_person_qty_usage'].std()
 
         if electricity_std > 0:
             electricity_z = (individual_equivalent_consumption - electricity_baseline) / electricity_std
@@ -550,6 +571,9 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
         # Fallback if electricity data is not loaded or invalid
         electricity_z = max(0, (individual_equivalent_consumption - 50) / 50)
     st.write(f"DEBUG: Electricity Z-score: {electricity_z}")
+    st.write(f"DEBUG: Electricity Baseline used for Z-score: {electricity_baseline:.4f} kWh")
+    st.write(f"DEBUG: Electricity Std Dev used for Z-score: {electricity_std:.4f} kWh")
+
 
     # 2. Water Z-score
     # Baseline for water consumption (e.g., 130 liters/day * 30 days = 3900 liters/month)
@@ -626,19 +650,11 @@ def calculate_sustainability_score(customer_data, company_data_df, electricity_d
     st.write(f"DEBUG: Private Monthly Km: {private_monthly_km}, Public Monthly Km: {public_monthly_km}, Transport Z-score: {transport_z}")
     
     # 4. Company ESG Z-score
-    company_z = 0
-    if company_data_df is not None and not company_data_df.empty and 'Environment_Score' in company_data_df.columns:
-        company_baseline = company_data_df['Environment_Score'].mean()
-        company_std = company_data_df['Environment_Score'].std()
-        if company_std > 0:
-            company_z = (crisil_esg - company_baseline) / company_std
-        else:
-            company_z = (crisil_esg - company_baseline) / 15 # Fallback if std is 0
-    else:
-        # Fallback if company data is not loaded or invalid
-        company_z = (crisil_esg - 70) / 15 # Assuming a baseline of 70 and std of 15
+    m = 0.1 # Multiplier for crisil_esg
+    company_z = crisil_esg * m
     # Invert company Z-score so higher ESG scores result in a better (more negative) Z-score
-    company_z = -company_z
+    # This inversion is no longer needed as per the new formula company_z = crisil_esg * m
+    company_z = -company_z 
     st.write(f"DEBUG: Company ESG Score: {crisil_esg}, Company Z-score: {company_z}")
 
     # --- Weighted Total Z-score ---
@@ -888,7 +904,7 @@ def page_test_customer():
                         with col_2w1:
                             w2_category = st.selectbox("2W Category", ["Scooter", "Motorcycle"], key=f"2w_cat_val_{i}")
                         with col_2w2:
-                            w2_engine_cc = st.number_input("Engine (cc)", 50, 1500, 150, key=f"2w_cc_val_{i}")
+                            w2_engine_cc = st.number_input("Engine (cc)", 50, 1500, 150, key=f"2w_cc_input")
                         with col_2w3:
                             w2_fuel_type = st.selectbox("Fuel Type", ["petrol", "diesel", "electric"], key=f"2w_fuel_val_{i}")
                         if w2_engine_cc <= 150:
@@ -905,11 +921,11 @@ def page_test_customer():
                         with col_4w1:
                             w4_car_type = st.selectbox("Car Type", ["small", "hatchback", "premium_hatchback", "compact_suv", "sedan", "suv", "hybrid"], key=f"4w_type_val_{i}")
                         with col_4w2:
-                            w4_engine_cc = st.slider("Engine (cc)", 600, 4000, 1200, key=f"4w_cc_val_{i}")
+                            w4_engine_cc = st.slider("Engine (cc)", 600, 4000, 1200, key=f"4w_cc_input")
                         w4_fuel_options = ["petrol", "diesel", "cng", "electric"]
                         if w4_car_type == "hybrid":
                             w4_fuel_options = ["petrol", "diesel", "electric"]
-                        w4_fuel_type = st.selectbox("Fuel Type", w4_fuel_options, key=f"4w_fuel_val_{i}")
+                        w4_fuel_type = st.selectbox("Fuel Type", w4_fuel_options, key=f"4w_fuel_input")
                         base_ef = emission_factors["four_wheeler"][w4_car_type][w4_fuel_type]["base"]
                         uplift = emission_factors["four_wheeler"][w4_car_type][w4_fuel_type]["uplift"]
                         engine_factor = 1.0 + min(1.0, (w4_engine_cc - 600) / 3400) * 0.5 if w4_fuel_type != "electric" else 1.0
@@ -1442,14 +1458,18 @@ def page_reporting():
             state_electricity_data = electricity_data[electricity_data['state_name'] == user_state]
 
             if not state_electricity_data.empty:
-                state_avg_elec = state_electricity_data['qty_usage_in_1month'].mean() # Use mean for the state
+                state_avg_elec = state_electricity_data['per_person_qty_usage'].mean() # Use mean for the state
+                state_std_elec = state_electricity_data['per_person_qty_usage'].std() # Get std for the state
+                num_observations = len(state_electricity_data) # Get number of observations
                 st.metric(f"Your Monthly Individual Electricity Usage ({user_state})", f"{individual_equivalent_consumption:.2f} kWh")
                 st.metric(f"Average Monthly Individual Electricity Usage ({user_state})", f"{state_avg_elec:.2f} kWh")
+                st.metric(f"Standard Deviation for {user_state}", f"{state_std_elec:.2f} kWh") # Display standard deviation
+                st.metric(f"Number of Observations in {user_state}", f"{num_observations}") # Display observations
 
                 fig, ax = plt.subplots(figsize=(10, 6))
                 
                 # Plotting distribution of averages from all states for context
-                sns.histplot(electricity_data['qty_usage_in_1month'], bins=15, kde=True, ax=ax, label="Distribution of State Averages")
+                sns.histplot(electricity_data['per_person_qty_usage'], bins=15, kde=True, ax=ax, label="Distribution of State Averages")
                 ax.axvline(individual_equivalent_consumption, color='red', linestyle='--', label='Your Usage')
                 ax.axvline(state_avg_elec, color='green', linestyle='--', label=f'{user_state} Average')
                 ax.set_title(f"Your Individual Electricity Usage Compared to {user_state} Average")
@@ -1934,7 +1954,7 @@ def page_reporting():
                                     better_than = (df_results['Env_Z_Score'] < company_z_display).mean() * 100
                                     st.success(f"**{selected_company_for_comparison}** performs better than **{better_than:.1f}%** of companies in this segment (based on Z-Score)")
                                 else:
-                                    st.warning(f"Selected company '{selected_company_for_comparison}' not found in the filtered dataset (Industry: {selected_esg_industry}, Employee Size: {selected_esg_emp_size}). Please ensure the company name matches exactly or check for case sensitivity.")
+                                    st.warning(f"Selected company '{selected_company_for_comparison}' not found in the dataset (Industry: {selected_esg_industry}, Employee Size: {selected_esg_emp_size}). Please ensure the company name matches exactly or check for case sensitivity.")
                             
                             else:
                                 st.markdown("#### Benchmark Group Analysis")
@@ -2260,8 +2280,8 @@ def page_reporting():
                 global_electricity_mean = 0
                 global_electricity_std = 1 
                 if st.session_state.electricity_data is not None and not st.session_state.electricity_data.empty:
-                    global_electricity_mean = st.session_state.electricity_data['qty_usage_in_1month'].mean()
-                    global_electricity_std = st.session_state.electricity_data['qty_usage_in_1month'].std()
+                    global_electricity_mean = st.session_state.electricity_data['cons_total_qty'].mean()
+                    global_electricity_std = st.session_state.electricity_data['cons_total_qty'].std()
 
 
                 for idx, row in test_df.iterrows():
@@ -2270,6 +2290,7 @@ def page_reporting():
                     try:
                         total_electricity_kwh = float(row.get("Electricity", 0.0)) if row.get("Electricity") is not None else 0.0
                         household_count = int(row.get("People in the household", 1)) if not pd.isna(row.get("People in the household")) else 1
+                        user_state_csv = str(row.get("State", INDIAN_STATES_UTS[0])).strip() # Get state from CSV
                         
                         divisor = household_count 
                         
@@ -2306,14 +2327,13 @@ def page_reporting():
 
                         transport_category_csv = str(row.get("Vehicle_Type", "Private Transport")).strip() # Use Vehicle_Type from CSV
                         
-                        # Ensure Private_Monthly_Km and Public_Monthly_Km are correctly read as floats
+                        # Ensure Private_Monthly_Km and Public_Trips_Per_Day are correctly read as floats
                         private_monthly_km_csv = pd.to_numeric(row.get("Private_Monthly_Km", 0.0), errors='coerce')
                         public_monthly_km_csv = pd.to_numeric(row.get("Public_Trips_Per_Day", 0.0), errors='coerce') # Corrected to Public_Trips_Per_Day from Public_Monthly_Km
 
                         # New: Read private and public trips per day from CSV for bulk processing
                         private_trips_per_day_csv = int(row.get("Private_Trips_Per_Day", 0)) if not pd.isna(row.get("Private_Trips_Per_Day")) else 0
                         public_trips_per_day_csv = int(row.get("Public_Trips_Per_Day", 0)) if not pd.isna(row.get("Public_Trips_Per_Day")) else 0
-
 
                         # Replace NaN with 0.0 if coercion failed
                         private_monthly_km_csv = private_monthly_km_csv if not pd.isna(private_monthly_km_csv) else 0.0
@@ -2360,6 +2380,7 @@ def page_reporting():
 
                         # Prepare customer data dict for the unified function
                         customer_data_for_bulk = {
+                            'State': user_state_csv, # Pass the state from the CSV row
                             'Electricity': total_electricity_kwh,
                             'People in the household': household_count,
                             'Crisil_ESG_Score': crisil_esg_csv,
