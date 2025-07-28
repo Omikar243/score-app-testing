@@ -24,7 +24,7 @@ st.markdown("""
         border: 1px solid #ddd;
         margin-bottom: 20px;
     }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; }\
     table, th, td { padding: 8px; text-align: center; }
     th {
         background-color: #f2f2f2;
@@ -904,7 +904,7 @@ def page_test_customer():
                         with col_2w1:
                             w2_category = st.selectbox("2W Category", ["Scooter", "Motorcycle"], key=f"2w_cat_val_{i}")
                         with col_2w2:
-                            w2_engine_cc = st.number_input("Engine (cc)", 50, 1500, 150, key=f"2w_cc_input")
+                            w2_engine_cc = st.number_input("Engine (cc)", 50, 1500, 150, key=f"2w_cc_input_{i}")
                         with col_2w3:
                             w2_fuel_type = st.selectbox("Fuel Type", ["petrol", "diesel", "electric"], key=f"2w_fuel_val_{i}")
                         if w2_engine_cc <= 150:
@@ -921,11 +921,11 @@ def page_test_customer():
                         with col_4w1:
                             w4_car_type = st.selectbox("Car Type", ["small", "hatchback", "premium_hatchback", "compact_suv", "sedan", "suv", "hybrid"], key=f"4w_type_val_{i}")
                         with col_4w2:
-                            w4_engine_cc = st.slider("Engine (cc)", 600, 4000, 1200, key=f"4w_cc_input")
+                            w4_engine_cc = st.slider("Engine (cc)", 600, 4000, 1200, key=f"4w_cc_input_{i}")
                         w4_fuel_options = ["petrol", "diesel", "cng", "electric"]
                         if w4_car_type == "hybrid":
                             w4_fuel_options = ["petrol", "diesel", "electric"]
-                        w4_fuel_type = st.selectbox("Fuel Type", w4_fuel_options, key=f"4w_fuel_input")
+                        w4_fuel_type = st.selectbox("Fuel Type", w4_fuel_options, key=f"4w_fuel_input_{i}")
                         base_ef = emission_factors["four_wheeler"][w4_car_type][w4_fuel_type]["base"]
                         uplift = emission_factors["four_wheeler"][w4_car_type][w4_fuel_type]["uplift"]
                         engine_factor = 1.0 + min(1.0, (w4_engine_cc - 600) / 3400) * 0.5 if w4_fuel_type != "electric" else 1.0
@@ -1515,7 +1515,7 @@ def page_reporting():
                     
                     state_hh_comparison = electricity_data.groupby('state_name')['hh_size'].mean().reset_index().sort_values('hh_size')
                     state_hh_comparison['is_user_state'] = state_hh_comparison['state_name'] == user_state
-
+                    
                     bars = ax_states.bar(state_hh_comparison['state_name'], 
                                         state_hh_comparison['hh_size'],
                                         color=state_hh_comparison['is_user_state'].map({True: 'red', False: 'skyblue'}),
@@ -2327,9 +2327,9 @@ def page_reporting():
 
                         transport_category_csv = str(row.get("Vehicle_Type", "Private Transport")).strip() # Use Vehicle_Type from CSV
                         
-                        # Ensure Private_Monthly_Km and Public_Trips_Per_Day are correctly read as floats
+                        # Ensure Private_Monthly_Km and Public_Monthly_Km are correctly read as floats
                         private_monthly_km_csv = pd.to_numeric(row.get("Private_Monthly_Km", 0.0), errors='coerce')
-                        public_monthly_km_csv = pd.to_numeric(row.get("Public_Trips_Per_Day", 0.0), errors='coerce') # Corrected to Public_Trips_Per_Day from Public_Monthly_Km
+                        public_monthly_km_csv = pd.to_numeric(row.get("Public_Monthly_Km", 0.0), errors='coerce') # FIX: Read Public_Monthly_Km
 
                         # New: Read private and public trips per day from CSV for bulk processing
                         private_trips_per_day_csv = int(row.get("Private_Trips_Per_Day", 0)) if not pd.isna(row.get("Private_Trips_Per_Day")) else 0
@@ -2387,7 +2387,7 @@ def page_reporting():
                             'Water_Per_Person_Monthly': per_person_monthly_water_calc,
                             'Km_per_month': total_monthly_km_csv, # Total for display
                             'Transport_Emission_Factor': commute_emission_calc, # Overall for display
-                            'Transport_People_Count': 1, # Assuming 1 person for bulk for now, adjust if CSV has this
+                            'Transport_People_Count': int(row.get("Transport_People_Count", 1)) if not pd.isna(row.get("Transport_People_Count")) else 1, 
                             'Private_Monthly_Km': private_monthly_km_csv, # Pass calculated private km
                             'Public_Monthly_Km': public_monthly_km_csv # Pass calculated public km
                         }
